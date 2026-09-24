@@ -12,7 +12,7 @@ Remit's claim is all three together, with the third established against the clou
 1. **Warrants.** A human issues a warrant: which agent, which actions on which resources, for how long, and why. An agent can delegate part of its warrant, and a delegation can only narrow.
 2. **A broker.** The agent holds no standing credentials. The broker turns a valid warrant into short-lived cloud credentials, stamped with the warrant's identifier so that the provider records it on every call.
 3. **Reconciliation.** The provider's own audit record is compared with the warrants in both directions: every event must map to a warrant that permits it, and every warrant's events must be known. An action outside any warrant becomes a finding, not an absence.
-4. **A witnessed log.** Warrants, credential issuance and reconciliation results go into an append-only log anchored to independent authorities, so that anyone can verify them offline without trusting the agent or the operator.
+4. **A witnessed log.** Warrants and reconciliation results go into an append-only log whose every state is cosigned by witnesses the verifier chooses, so that anyone can check them offline without trusting the agent or the log's operator. A warrant that is not in the log is never honoured.
 
 What Remit does not claim is part of the design, not a footnote: see `docs/SPEC.md` section 7 and `docs/THREAT-MODEL.md`.
 
@@ -28,7 +28,7 @@ Early. The specification, the threat model, warrants, signatures and delegation 
 | Session policy compiler (AWS) | Implemented, property-tested, checked against AWS's policy simulator |
 | AWS broker and `remit` command | Implemented; first live session run on 2026-09-24, CloudTrail carries the warrant id |
 | Reconciler and `remit reconcile` | Implemented; first real run on 2026-09-24 over 384 events, verdict incomplete for three real one-second session overruns, now prevented (conformance/RESULTS.md) |
-| Witnessed log | Not started |
+| Witnessed log (`remit-log`) | In progress: the Merkle tree, checkpoints and cosignatures, tested against the RFC, transparency-dev's proof corpus and the reference Go implementations (ADR 0007) |
 
 ## Engineering
 

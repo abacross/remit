@@ -337,3 +337,62 @@ Until a per-service table exists, the reconciler is the backstop: an event whose
 
 **Conformance.** Beyond the argument, compiled policies are checked against AWS's own evaluator, the IAM policy simulator, on generated warrants and requests: every request the simulator allows must be one the warrant permits.
 The first run, on 2026-09-24, found no violation in 144 decisions across five services, and the simulator treated resource case as significant in every probe; `conformance/RESULTS.md` has the detail and its limits.
+
+## 9. The log
+
+Decided in ADR 0007.
+The tree is RFC 9162's with SHA-256, and checkpoints, notes, cosignatures, the witness protocol and the served layout are C2SP's (tlog-checkpoint, signed-note, tlog-cosignature, tlog-witness, tlog-tiles).
+This section defines only what Remit adds: what goes in, who must have signed, and when an entry must be there.
+
+### 9.1 Entries
+
+An entry is the 8 bytes `REMITLv1`, one kind byte, and a body:
+
+- kind `0x01`, **a warrant**: the body is one signed warrant in its transport form (section 5.5). Every link of a chain is its own entry.
+- kind `0x02`, **a result**: the body is the SHA-256 of a reconciliation result's exact bytes (32 bytes), the reconciler's Ed25519 public key (32 bytes), and the result's signature (64 bytes, section 6.6). The result itself is published beside the log under its hash; the entry fixes which result was signed, by which key, and in what order.
+
+An entry is at most 65,535 bytes, the most a tile's entry bundle can carry (tlog-tiles prefixes each entry with a 16-bit length).
+A signed warrant whose transport form is longer than 65,526 bytes therefore cannot be logged, and by section 9.3 cannot be used.
+A warrant small enough to compile to an AWS session policy (at most 2,048 characters, section 8.2) is far below this.
+
+The log appends only entries whose signatures verify: a warrant entry by section 5.2, a result entry against the result's bytes, which the appender supplies.
+An entry's leaf hash is `SHA-256(0x00 || entry)` (RFC 9162 section 2.1.1).
+
+### 9.2 Checkpoints and witnesses
+
+A checkpoint is the log's origin, size and root, as a signed note (tlog-checkpoint).
+
+1. The log signs with an Ed25519 note key (signature type `0x01`) whose key name is the log's origin.
+2. A checkpoint has no extension lines. The checkpoint specification calls them not auditable; Remit refuses them.
+3. A witness cosigns with a timestamped Ed25519 key (signature type `0x04`, tlog-cosignature), and only after the checks of tlog-witness: the checkpoint is signed by a log key it trusts for the origin; its old size is the size of the last checkpoint it cosigned for that origin; the consistency proof from that checkpoint verifies (section 2.1.4 of RFC 9162); a checkpoint of the same size has the same root; a checkpoint of size zero has the empty tree's root.
+4. A verifier holds a **trust policy**: the log's key, the witness keys it trusts, and a quorum `k`. A checkpoint is trusted when its note verifies, it is signed by the log key for the log's own origin, and at least `k` distinct witness public keys cosigned it. A signature line from a key the verifier knows that fails to verify rejects the whole note; lines from unknown keys are ignored.
+
+Base64 in notes, keys and checkpoints has one accepted spelling (RFC 4648 section 4, padded, with zero unused bits), so a signed object cannot be re-encoded without breaking its signature.
+
+### 9.3 Logged before used
+
+The broker issues a session for a chain only when every link is **proven logged**: for each link, the broker holds a checkpoint that its trust policy accepts, the link's entry index, and an inclusion proof of the entry's leaf hash in that checkpoint's tree (RFC 9162 section 2.1.3), and the proof verifies.
+
+It follows that every warrant ever honoured is in the log, where anyone who reads the log can see it.
+An issuer key used without its holder's knowledge leaves entries the holder can find, which is what threat model assumption 3 relies on.
+
+No freshness is required of the proving checkpoint.
+A witness cosigns only checkpoints consistent with every one it cosigned before, so an entry proven in one trusted checkpoint is in every later checkpoint the same witnesses cosign, and cannot be removed from the history a verifier trusts without the log and a quorum of that verifier's witnesses acting together.
+
+### 9.4 The log and reconciliation
+
+The set `L` of section 6 is the set of warrants whose entries are included in a checkpoint the reconciler's trust policy accepts.
+A result names that checkpoint (origin, size and root), and an event carrying an identifier that is not in `L` is an unwarranted event, whatever else the reconciler may have been shown.
+The reconciler appends each result it signs.
+
+### 9.5 Serving
+
+The log is served as tlog-tiles static files: `checkpoint`, `tile/<L>/<N>` and `tile/entries/<N>`, each with the paths and partial-tile rules of that specification.
+Results are served beside them at `result/<hex SHA-256>`.
+Tiles and results never change once written; only `checkpoint` does.
+
+### 9.6 What the log does not claim
+
+- It does not stop a thief with an issuer key from logging and using a warrant. It makes that warrant public, and the reconciler reports every event under it.
+- It does not choose witnesses for the verifier. A verifier that trusts witnesses the log's operator controls has no split-view defence.
+- It is on the broker's path: when inclusion cannot be proven, no session is issued. Remit fails closed, so the log's availability is part of Remit's.
