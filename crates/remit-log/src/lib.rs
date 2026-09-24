@@ -13,6 +13,7 @@ pub mod checkpoint;
 pub mod entry;
 pub mod merkle;
 pub mod note;
+pub mod tiles;
 pub mod witness;
 
 pub use checkpoint::{Checkpoint, CheckpointError, TrustPolicy, TrustedCheckpoint, open};
@@ -22,4 +23,5 @@ pub use merkle::{
     verify_consistency, verify_inclusion,
 };
 pub use note::{KeyKind, Note, NoteError, NoteSigner, SignatureLine, Verified, VerifierKey};
+pub use tiles::{TILE_WIDTH, TileError, TileSource, TileWrite, Tiles};
 pub use witness::{MAX_PROOF_LINES, Witness, WitnessError};
