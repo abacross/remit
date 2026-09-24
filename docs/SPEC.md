@@ -1,0 +1,191 @@
+# Remit specification
+
+Status: draft 0.1, 2026-09-24.
+This document is normative: the code implements it, and where they disagree the code is wrong.
+Sections marked **Open** are not yet decided and must not be implemented until they are.
+
+## 1. What Remit is for
+
+An AI agent acting in a cloud account should be able to answer three questions with evidence rather than assurance.
+
+1. **Authority.** Was each action it took authorized, by whom, for what purpose, within what bounds?
+2. **Bounds.** Could it have taken an action outside that authority?
+3. **Completeness.** Did it take any action that is not accounted for?
+
+Existing tools answer the first question with tokens and the second with policy.
+Tamper-evident logs prove that what was recorded has not changed since.
+None of them proves the third: a record can be intact and still incomplete, and an action that was never recorded is invisible to every integrity check.
+
+Remit's claim is the conjunction of all three, stated precisely in section 6 and bounded honestly in section 7.
+
+## 2. Terms
+
+- **Issuer.** A human, or a key held on a human's behalf, who grants authority. The root of every chain.
+- **Agent.** A software principal that acts. It holds no standing cloud credentials.
+- **Warrant.** A statement, signed by an issuer or by a delegating agent, of what one agent may do, where, and when.
+- **Grant.** One allowance inside a warrant: a set of actions on a set of resources.
+- **Request.** One concrete cloud action an agent wants to take: an action name, a resource, a time.
+- **Broker.** The component that turns a valid warrant into short-lived cloud credentials, and nothing else does.
+- **Cloud record.** The provider's own audit log of API calls, written by the provider, not by the agent or by Remit (on AWS, CloudTrail).
+- **Reconciler.** The component that compares warrants with the cloud record, in both directions.
+- **Log.** The append-only, externally anchored, witnessed record of warrants, credential issuance and reconciliation results.
+
+## 3. Warrants
+
+### 3.1 Fields
+
+A warrant has exactly these fields.
+
+| Field | Meaning |
+| --- | --- |
+| `version` | The encoding and semantics version. This document defines version 1. |
+| `issuer` | The identifier of the key that signs the warrant. |
+| `subject` | The identifier of the agent the warrant authorizes. |
+| `purpose` | Free text, UTF-8, at most 512 bytes, stating why. It has no effect on authorization and is part of the record. |
+| `not_before` | The first second, in UTC seconds since the Unix epoch, at which the warrant is valid. |
+| `not_after` | The last second at which the warrant is valid. `not_before < not_after` is required. |
+| `grants` | A non-empty list of grants. Authorization is the union of the grants. |
+| `parent` | The identifier of the warrant this one was delegated from, or absent for a root warrant. |
+| `max_depth` | How many further delegations this warrant permits. A root with `max_depth = 0` cannot be delegated. |
+
+An **identifier** (for `issuer` and `subject`) is 1 to 128 characters of printable ASCII (0x21 to 0x7E).
+
+**Limits.** A warrant has at most 64 grants, and a grant at most 64 action patterns and 64 resource patterns.
+A pattern is at most 2,048 bytes, the length limit of an AWS ARN.
+These bound the canonical encoding and the cost of every check; a warrant over them is refused.
+
+There are no deny statements.
+A warrant can only allow; anything not allowed is refused.
+This is deliberate: it makes attenuation (section 4) decidable by a simple rule, and it removes the class of errors in which an allow and a deny interact in a way nobody predicted.
+
+### 3.2 Grants
+
+A grant has two fields, both non-empty lists of patterns.
+
+- `actions`: patterns over action names, such as `s3:GetObject` or `s3:Get*`.
+- `resources`: patterns over resource names, such as `arn:aws:s3:::reports-2026/*`.
+
+A grant allows a request when some action pattern matches the request's action and some resource pattern matches the request's resource.
+
+### 3.3 Patterns
+
+A pattern is a non-empty string of printable ASCII (0x21 to 0x7E) in which two characters are special:
+
+- `*` matches any sequence of characters, including the empty one;
+- `?` matches exactly one character.
+
+Every other character matches itself.
+There is no escaping: a pattern cannot match a literal `*` or `?`, and neither character is valid in a resource or action name that Remit accepts.
+
+Action matching is case-insensitive, because AWS action names are: "The prefix and the action name are case insensitive. For example, `iam:ListAccessKeys` is the same as `IAM:listaccesskeys`" (IAM policy reference, Action element).
+
+Resource matching is case-sensitive.
+AWS documents case sensitivity for some resource names ("In the `Resource` element, the IAM user name is case sensitive") but not as a rule for every service.
+Where a service compares resource names without regard to case, AWS may allow a request that the warrant does not permit; section 8 states what that means for compilation, and the reconciler reports any such event as outside its warrant.
+
+**Remit's `*` is deliberately broader than AWS's.**
+In AWS resource patterns, `*` matches within one colon-separated segment of an ARN, and "If the `*` wildcard is the last character of a resource ARN segment, it can expand to match beyond the colon boundaries" (IAM policy reference, Resource element).
+Remit's `*` matches any sequence, colons included.
+For the same pattern text, then, everything AWS matches Remit also matches, and never the reverse.
+This is the safe direction: a warrant compiled to AWS can only be enforced more narrowly than it reads, never more widely.
+
+Implementations must reject, at construction, any warrant containing a pattern outside this alphabet, rather than normalize it.
+
+### 3.4 The authorization decision
+
+A warrant `W` permits a request `R = (subject, action, resource, t)` exactly when all of the following hold:
+
+1. `R.subject = W.subject`;
+2. `W.not_before <= R.t <= W.not_after`;
+3. some grant in `W` allows `(R.action, R.resource)` by section 3.2.
+
+Signature verification and chain validation (section 5) are preconditions of using a warrant at all, not part of this function; the function is pure and total.
+
+### 3.5 Identity
+
+A warrant's identifier is derived from its content, so the same warrant always has the same identifier and a different warrant never does, up to the collision resistance of SHA-256.
+
+1. Encode the warrant canonically (section 3.6).
+2. Take SHA-256 of the encoding.
+3. Take the first 20 bytes and encode them in RFC 4648 base32, lowercase, without padding: 32 characters.
+4. Prefix `rw1-`: 36 characters in total.
+
+The result uses only `a` to `z`, `2` to `7` and `-`.
+It therefore fits AWS STS SourceIdentity, which accepts 2 to 64 characters of `[\w+=,.@-]` and must not begin with `aws:`.
+160 bits of the digest is far beyond any practical collision search for this use; the truncation exists only to fit the field.
+
+### 3.6 Canonical encoding
+
+The encoding is a byte string, written field by field in the order of section 3.1, with no optional whitespace and no alternative forms.
+
+- Integers are unsigned, big-endian, fixed width: `version` 2 bytes, timestamps and `max_depth` 8 bytes.
+- A string is its UTF-8 bytes preceded by their length as 4 bytes big-endian.
+- A list is its element count as 4 bytes big-endian, then its elements.
+- `parent` is one byte, `0` for absent or `1` followed by the identifier as a string.
+- The encoding begins with the 8 ASCII bytes `REMITWv1`.
+
+Grants are encoded in the order given, and patterns within a grant in the order given: two warrants that list the same grants in a different order are different warrants with different identifiers.
+Implementations must not sort or deduplicate on the author's behalf, because the signature covers what the author wrote.
+
+## 4. Delegation and attenuation
+
+An agent may delegate part of its authority to another agent by issuing a child warrant whose `parent` is its own warrant's identifier.
+
+A child `C` is a valid attenuation of its parent `P` exactly when:
+
+1. `P.max_depth >= 1` and `C.max_depth <= P.max_depth - 1`;
+2. `P.not_before <= C.not_before` and `C.not_after <= P.not_after`;
+3. every grant in `C` is covered by some grant in `P`, where a grant `g` covers `h` when every action pattern of `h` is contained in some action pattern of `g`, and every resource pattern of `h` is contained in some resource pattern of `g`;
+4. `C.issuer` is the key of `P.subject`: only the holder of a warrant can delegate from it.
+
+Pattern `q` contains pattern `p` when every string matched by `p` is matched by `q`.
+
+**The attenuation theorem.** If `C` is a valid attenuation of `P`, then every request `C` permits, other than in subject, is permitted by `P`.
+Formally: for every `(action, resource, t)`, if `C` permits `(C.subject, action, resource, t)` then `P` permits `(P.subject, action, resource, t)`.
+
+Implementations may decide containment conservatively: a check that sometimes answers "not contained" for patterns that are in fact contained is acceptable, because it only refuses a delegation.
+A check that ever answers "contained" wrongly is a defect that breaks the theorem, and must be treated as a security vulnerability.
+
+## 5. Signatures and chains
+
+**Open.** The signature scheme (Ed25519 over the canonical encoding is the working assumption), key identifiers, and whether chains are carried as a bundle or resolved from the log.
+The decision is ADR 0003.
+
+## 6. Completeness
+
+This is the property that distinguishes Remit, and it is stated with its assumptions rather than without them.
+
+Let `L` be the set of warrants in the log, and `E` the set of events in the cloud record for a set of accounts over a time window, restricted to the principals Remit manages.
+
+**Every event is warranted.**
+For every event `e` in `E`, there is a warrant `W` in `L` such that `e` carries `W`'s identifier (on AWS, as the session's SourceIdentity) and `W` permits `e`'s request.
+
+**Every warrant is accounted for.**
+For every warrant `W` in `L` whose validity window has closed, the set of events carrying `W`'s identifier is known, and each one is either permitted by `W` or reported as a violation.
+
+A reconciliation run produces, for its window, a signed result that is either `complete` (both statements hold) or a list of specific findings: an event with no warrant, an event outside its warrant, a warrant whose events are missing from the record, or a gap in the record itself.
+
+The claim is only as strong as its assumptions, which are part of the claim and are printed with every result:
+
+1. The managed principals can obtain cloud credentials only through the broker. On AWS this is enforced by role trust policies that require `sts:SourceIdentity`, and it must itself be verified by the reconciler on every run, not assumed.
+2. The cloud record covers the actions in question. On AWS, management events are recorded by default and data events only when configured; an action class the record does not cover is outside the claim, and the result names the classes it covered.
+3. The cloud record for the window is itself complete and unaltered. On AWS, CloudTrail log file integrity validation is the evidence, and a run without it can at best report `complete, unvalidated`.
+4. The window has closed long enough for delivery. **Open:** the settling period, to be set from measurement rather than from documentation alone.
+
+## 7. What Remit does not claim
+
+- It does not judge intent. A warranted action can still be the wrong one; the warrant says who allowed it.
+- It does not cover principals it does not manage. A human with their own credentials is outside the claim, and the reconciler reports what it does not cover rather than implying it covers everything.
+- It does not make the cloud record trustworthy; it states which evidence of the record's integrity it relied on.
+- It does not prevent an action the cloud permits and the warrant permits. It makes that action attributable.
+
+## 8. AWS mapping
+
+**Open** in detail; the constraints that shape it are recorded here because they are facts, not choices.
+
+- A warrant becomes an STS session through `AssumeRole` with `SourceIdentity` set to the warrant identifier and an inline session policy compiled from the grants.
+  AWS: "The resulting session's permissions are the intersection of the role's identity-based policy and the session policies," and SourceIdentity "persists across chained role sessions" (STS API reference, AssumeRole).
+- The session policy is limited to 2,048 characters of plaintext. A warrant whose compiled policy would exceed that is refused by the broker, never truncated, because a truncated policy is a different policy.
+- The compiled policy must never permit a request the warrant does not. This is the **compilation soundness** property and it gets the same treatment as the attenuation theorem: property-tested, and a counterexample is a vulnerability.
+- Two things bear on soundness and are stated rather than assumed. AWS's `*` is narrower than Remit's (section 3.3), which helps. A service that compares resource names without regard to case could allow a request whose case differs from the warrant's, which does not. **Open:** a per-service table of resource case behaviour, built from AWS documentation, and until it exists the reconciler is the backstop that reports such an event.
+- Session duration is between 900 and 43,200 seconds (STS API reference), so a warrant's window is covered by one or more sessions, each no longer than the remaining window.
