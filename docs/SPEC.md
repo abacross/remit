@@ -223,11 +223,45 @@ The claim is only as strong as its assumptions, which are part of the claim and 
 
 ## 8. AWS mapping
 
-**Open** in detail; the constraints that shape it are recorded here because they are facts, not choices.
+Decided in ADR 0006.
+The constraints below are AWS facts, quoted from its references; the choices are marked as such.
 
-- A warrant becomes an STS session through `AssumeRole` with `SourceIdentity` set to the warrant identifier and an inline session policy compiled from the grants.
-  AWS: "The resulting session's permissions are the intersection of the role's identity-based policy and the session policies," and SourceIdentity "persists across chained role sessions" (STS API reference, AssumeRole).
-- The session policy is limited to 2,048 characters of plaintext. A warrant whose compiled policy would exceed that is refused by the broker, never truncated, because a truncated policy is a different policy.
-- The compiled policy must never permit a request the warrant does not. This is the **compilation soundness** property and it gets the same treatment as the attenuation theorem: property-tested, and a counterexample is a vulnerability.
-- Two things bear on soundness and are stated rather than assumed. AWS's `*` is narrower than Remit's (section 3.3), which helps. A service that compares resource names without regard to case could allow a request whose case differs from the warrant's, which does not. **Open:** a per-service table of resource case behaviour, built from AWS documentation, and until it exists the reconciler is the backstop that reports such an event.
-- Session duration is between 900 and 43,200 seconds (STS API reference), so a warrant's window is covered by one or more sessions, each no longer than the remaining window.
+### 8.1 Sessions
+
+A warrant is used on AWS through an STS session obtained by the broker with `AssumeRole`:
+
+- `SourceIdentity` is the warrant identifier (section 3.5). AWS: SourceIdentity is 2 to 64 characters of `[\w+=,.@-]`, and "persists across chained role sessions" (STS API reference, AssumeRole).
+- `Policy` is the session policy compiled from the warrant (section 8.2). AWS: "The resulting session's permissions are the intersection of the role's identity-based policy and the session policies."
+- `DurationSeconds` is at least 900 and at most the smaller of the role's maximum and the time left in the warrant's window. A warrant with less than 900 seconds left gets no session.
+- The role's trust policy allows `sts:AssumeRole` only to the broker's principal, and requires `sts:SourceIdentity` to be present (choice), so no session on that role exists without a warrant identifier stamped on it.
+
+### 8.2 Compiling a warrant to a session policy
+
+The compiled policy has `"Version": "2012-10-17"` and one `Allow` statement per grant, with the grant's action patterns as `Action` and its resource patterns as `Resource`, copied byte for byte, and a condition limiting it to the warrant's window:
+
+`"Condition": {"DateGreaterThanEquals": {"aws:CurrentTime": <not_before>}, "DateLessThanEquals": {"aws:CurrentTime": <not_after>}}`
+
+with both times in ISO 8601 UTC (`YYYY-MM-DDTHH:MM:SSZ`).
+It is serialized without whitespace, in the order of the warrant's grants, so one warrant has one compiled policy.
+
+The compiler **refuses**, rather than approximates, a warrant with:
+
+1. a pattern containing `${`. AWS substitutes policy variables in `Resource` when the version is `2012-10-17` ("Variables were introduced in version `2012-10-17`"; IAM reference, policy variables), so `${...}` would match something other than what the warrant says;
+2. an action pattern that is not `*` and not a service prefix without wildcards, a colon, and a name;
+3. a resource pattern that is not `*` and not an ARN with at least five colons and no wildcard in its service segment ("You can't use a wildcard in the service segment"; IAM reference, Resource element);
+4. a compiled policy over 2,048 characters ("The plaintext that you use for both inline and managed session policies can't exceed 2,048 characters"; STS API reference). A shorter policy that allowed less would be a different warrant; a refusal tells the issuer to split the work.
+
+### 8.3 Compilation soundness
+
+**The compiled policy never allows a request the warrant does not permit.**
+
+The argument has three parts, and each is either a fact quoted above or a property the tests check.
+
+1. The compiler copies every pattern verbatim and adds nothing to what a statement allows except the window condition, which only narrows. Property-tested: parsing the compiled policy gives back exactly the warrant's grants and window.
+2. For the same pattern text, AWS matches a subset of what Remit matches: action matching is case-insensitive in both, and AWS's `*` is confined to an ARN segment except at a segment's end, where Remit's `*` is not confined at all (section 3.3). With `${` refused, AWS has nothing to substitute.
+3. The session's permissions are the intersection of this policy and the role's, so they are no larger than this policy.
+
+The one assumption that is not a documented fact is resource case: AWS does not state that every service compares resource names with regard to case (section 3.3).
+Until a per-service table exists, the reconciler is the backstop: an event whose resource differs only in case from what the warrant permits is reported as outside it.
+
+**Conformance.** Beyond the argument, compiled policies are checked against AWS's own evaluator, the IAM policy simulator, on generated warrants and requests: every request the simulator allows must be one the warrant permits.
