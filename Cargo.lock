@@ -1841,6 +1841,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "remit-logstore"
+version = "0.1.0"
+dependencies = [
+ "remit-core",
+ "remit-log",
+ "sha2 0.11.0",
+]
+
+[[package]]
 name = "remit-reconcile"
 version = "0.1.0"
 dependencies = [

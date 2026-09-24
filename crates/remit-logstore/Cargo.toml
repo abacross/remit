@@ -1,0 +1,17 @@
+[package]
+name = "remit-logstore"
+description = "The Remit log on a filesystem, in the tlog-tiles layout it is served in: crash-safe appends, witness cosigning, and inclusion proofs (SPEC section 9)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+remit-core = { path = "../remit-core" }
+remit-log = { path = "../remit-log" }
+sha2 = "0.11.0"

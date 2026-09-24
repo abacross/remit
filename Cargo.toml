@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/remit-core", "crates/remit-aws", "crates/remit-broker", "crates/remit-cli", "crates/remit-reconcile", "crates/remit-log"]
+members = ["crates/remit-core", "crates/remit-aws", "crates/remit-broker", "crates/remit-cli", "crates/remit-reconcile", "crates/remit-log", "crates/remit-logstore"]
 
 [workspace.package]
 version = "0.1.0"
