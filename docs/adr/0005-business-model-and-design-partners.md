@@ -51,13 +51,15 @@ Once the setup in section 6 is done, the marketing agent runs the program withou
 
 **It may:**
 
-- find candidates in public sources, and recipients' addresses only where an organization publishes them for contact (a website's contact or security page, a GitHub organization's public email); never an address scraped from commits or guessed;
+- find candidates in public sources, and recipients' addresses only where an organization publishes an email address for contact (a website's contact page, a GitHub organization's public email); never an address scraped from commits or guessed, never a security or vulnerability-report address, and never a contact form: forms are for customers, not for outreach (owner, 2026-09-24);
 - send at most ten messages a day, to United States recipients only, each specific to that team and citing the public evidence it was chosen on;
 - send one follow-up after seven days without a reply, and nothing after that;
 - answer factual questions from what Abacross has already published;
 - offer exactly the design-partner terms above, and accept a team that says yes to them.
 
 **It must not, and queues instead:** anything involving money, a contract, an NDA, a security questionnaire, access to anyone's systems, a press or public-speaking request, any claim about Abacross that is not already published, and any complaint.
+
+**Every message says who wrote it.** The agent writes and sends these messages, so the signature says so: "Written and sent by Abacross's operations agent for Mike Oh. A person reads every reply that needs one." It is never signed as if Mike wrote it (owner, 2026-09-24): an agent writing to strangers under a person's name, without saying so, is the opposite of what Remit is for.
 
 **Every message** identifies Abacross as the sender and itself as a commercial message, carries the company's postal address and a working opt-out, and has a subject line that says what it is (FTC, CAN-SPAM compliance guide: "The law makes no exception for business-to-business email", a "valid physical postal address", opt-outs honoured within 10 business days and a mechanism that works for 30 days).
 
