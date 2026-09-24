@@ -17,6 +17,10 @@ use remit_core::{ChainError, KeyId, SignedWarrant, WarrantId, verify_chain};
 pub const MIN_SESSION_SECONDS: u64 = 900;
 /// The longest session STS issues.
 pub const MAX_SESSION_SECONDS: u64 = 43_200;
+/// Seconds kept between a session's planned end and its warrant's end, for request
+/// latency and clock skew between this machine and AWS. The first live session, planned
+/// to end exactly at `not_after`, ended a second later by AWS's clock (2026-09-24).
+pub const SKEW_MARGIN_SECONDS: u64 = 60;
 
 /// Why no session was planned. Every case is a refusal.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -104,10 +108,11 @@ pub fn plan(
         return Err(PlanError::RoleMaxTooShort(role_max_seconds));
     }
     let remaining = leaf.not_after().saturating_sub(now);
-    if remaining < MIN_SESSION_SECONDS {
+    let usable = remaining.saturating_sub(SKEW_MARGIN_SECONDS);
+    if usable < MIN_SESSION_SECONDS {
         return Err(PlanError::TooLittleTime { remaining });
     }
-    let duration_seconds = remaining.min(role_max_seconds).min(MAX_SESSION_SECONDS);
+    let duration_seconds = usable.min(role_max_seconds).min(MAX_SESSION_SECONDS);
     let policy = compile_session_policy(leaf).map_err(PlanError::Compile)?;
     Ok(SessionPlan {
         warrant_id: leaf.id(),
@@ -145,7 +150,7 @@ mod tests {
         let p = plan(&c, std::slice::from_ref(&root), 5_000, 3_600).unwrap();
         assert_eq!(p.duration_seconds, 3_600); // the role's maximum
         let p = plan(&c, &[root], 8_000, 3_600).unwrap();
-        assert_eq!(p.duration_seconds, 2_000); // what is left of the warrant
+        assert_eq!(p.duration_seconds, 2_000 - SKEW_MARGIN_SECONDS); // what is left, less the margin
         assert_eq!(p.warrant_id, c[0].warrant().id());
     }
 

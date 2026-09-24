@@ -219,6 +219,67 @@ The claim is only as strong as its assumptions, which are part of the claim and 
 4. The action was taken by the managed session itself. AWS: "The source identity information is not captured by CloudTrail when an AWS service or service-linked role carries out an action on behalf of a federated or workforce identity" (IAM guide, monitor and control actions taken with assumed roles). Actions a service takes on a session's behalf are outside the claim, and the reconciler reports the classes it saw.
 5. The window has closed long enough for delivery. **Open:** the settling period, to be set from measurement rather than from documentation alone.
 
+### 6.1 Inputs
+
+A reconciliation run takes:
+
+1. the warrant chains it may join to, each verified against the trusted roots (section 5.3); a chain that does not verify is not a warrant for this run and is reported;
+2. the managed roles: the role ARNs the broker assumes, and each role's trust policy as observed at the time of the run;
+3. the provider's events for a window `[from, to]`, and a statement of where they came from and what evidence of their integrity exists;
+4. the time of the run.
+
+### 6.2 Classifying events
+
+Every event in the window is in exactly one class.
+
+**A session creation** is an event with source `sts.amazonaws.com`, name `AssumeRole`, and a `roleArn` that is a managed role.
+It must satisfy all of:
+
+1. its `sourceIdentity` names a warrant `W` in the input;
+2. its `roleSessionName` equals `W`'s identifier;
+3. its `policy` is byte for byte the session policy compiled from `W` (section 8.2). AWS records the policy passed to `AssumeRole` in the event's request parameters, so a broker that passed a broader policy under a legitimate identifier is caught by the provider's own record;
+4. its time is inside `W`'s window, and its `durationSeconds` does not run past `W`'s `not_after`.
+
+A session creation that fails any of these is a **session mismatch**.
+
+**A managed action** is any other event whose `userIdentity` is a session of a managed role.
+It must carry a `sourceIdentity`, the identifier must name a warrant `W` in the input, and its time must be inside `W`'s window.
+One that does not carry a known identifier is an **unwarranted event**; one outside its warrant's window is an **out-of-window event**.
+A managed action with an error code is also reported as a **refused attempt**, which is information, not a failure: nothing was done.
+
+**Everything else** is activity by principals Remit does not manage.
+It is not a finding against the claim, which is about managed principals only, but it is counted by principal in every result, so that the claim's coverage is visible rather than implied.
+
+### 6.3 The warrant cross-check
+
+For every successful managed action, the reconciler also asks whether `W` permits the recorded action on the recorded resource (section 3.4, with the request built by section 6.5); time is not part of this question, because an event outside the window is already its own finding, and one fault is reported once.
+This is a second line of defence: the primary guarantee is that AWS enforced the compiled policy, which never allows more than `W` (section 8.3).
+A request the cross-check finds outside `W` is an **outside-warrant event** and fails the run, because it means either a mapping gap or a soundness failure, and both must be looked at.
+A request whose resource cannot be determined is **undetermined**, reported and never guessed.
+
+### 6.4 The verdict
+
+A run is **complete** when it has no session mismatch, no unwarranted event, no out-of-window event and no outside-warrant event, and when every managed role's trust policy, as observed, admits only sessions with a warrant-form source identity.
+
+The verdict is qualified, never silently upgraded:
+
+- **complete, unvalidated** when the events came from a source without integrity evidence, such as CloudTrail event history rather than validated trail log files (assumption 3);
+- **provisional** when `to` is later than the time of the run minus the settling period (assumption 5).
+
+Any failure makes the verdict **incomplete**, with every finding listed.
+
+### 6.5 From an event to a request
+
+- **Action:** the event source without `.amazonaws.com`, a colon, and the event name. Where a service's IAM action differs from its event name, the difference is a mapping gap, surfaced by the cross-check rather than hidden by it. **Open:** a per-service table of such differences.
+- **Resource:** every ARN in the event's `resources`. An event with none is undetermined.
+- **Subject:** the warrant's subject; **time:** the event time.
+
+### 6.6 The result
+
+A result is a JSON document written once and signed as written: the signature is over the exact bytes, and a verifier checks it before parsing.
+It states the window, the event source and its integrity evidence, the managed roles and whether each trust policy was as required, the verdict, every finding with its event identifier, the per-warrant event counts, and the unmanaged activity by principal.
+The reconciler signs with its own key, which is not a warrant issuer's key.
+
 ## 7. What Remit does not claim
 
 - It does not judge intent. A warranted action can still be the wrong one; the warrant says who allowed it.
@@ -237,7 +298,7 @@ A warrant is used on AWS through an STS session obtained by the broker with `Ass
 
 - `SourceIdentity` is the warrant identifier (section 3.5). AWS: SourceIdentity is 2 to 64 characters of `[\w+=,.@-]`, and "persists across chained role sessions" (STS API reference, AssumeRole).
 - `Policy` is the session policy compiled from the warrant (section 8.2). AWS: "The resulting session's permissions are the intersection of the role's identity-based policy and the session policies."
-- `DurationSeconds` is at least 900 and at most the smaller of the role's maximum and the time left in the warrant's window. A warrant with less than 900 seconds left gets no session.
+- `DurationSeconds` is at least 900 and at most the smaller of the role's maximum and the time left in the warrant's window less a 60-second margin for request latency and clock skew. A warrant with less than 900 seconds left after the margin gets no session. The margin exists because the first live session, planned to end exactly at `not_after` by this machine's clock, ended one second later by AWS's; the reconciler found it (section 6.2).
 - The role's trust policy allows `sts:AssumeRole` only to the broker's principal, and requires `sts:SourceIdentity` to be present (choice), so no session on that role exists without a warrant identifier stamped on it.
 
 ### 8.2 Compiling a warrant to a session policy

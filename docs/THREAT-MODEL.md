@@ -31,7 +31,7 @@ Remit's guarantees depend on these, and each result restates the ones it relied 
 1. The cryptographic primitives hold: SHA-256 collision resistance, and the signature scheme (ADR 0003).
 2. The cloud provider enforces its own policies as documented, and its audit record is written by the provider.
 3. Issuer keys are held by the humans they name. Key custody is the issuer's responsibility; Remit makes a stolen issuer key visible in the log, not impossible to use.
-4. Clocks are within a bounded skew. **Open:** the bound, and how validity windows absorb it.
+4. Clocks are within 60 seconds of AWS's. The broker keeps that margin between a session's end and its warrant's end (SPEC section 8.1), and the reconciler checks every session against AWS's recorded time, so a larger skew shows up as a session mismatch rather than going unseen.
 
 ## Out of scope
 

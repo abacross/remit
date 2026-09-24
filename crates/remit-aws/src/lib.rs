@@ -187,3 +187,54 @@ pub fn iso8601(seconds: u64) -> String {
     let year = yoe + era * 400 + i64::from(month <= 2);
     format!("{year:04}-{month:02}-{day:02}T{hh:02}:{mm:02}:{ss:02}Z")
 }
+
+/// Parses `YYYY-MM-DDTHH:MM:SSZ` (the form [`iso8601`] writes and `CloudTrail` records) to
+/// UTC seconds since the Unix epoch, by Howard Hinnant's days-from-civil algorithm.
+/// Anything else, including fractional seconds or an offset other than `Z`, is `None`.
+///
+/// Arithmetic is allowed on the same bound as [`iso8601`]: years 1970 to 9999, so every
+/// intermediate is far below `i64` overflow; round-trip tested against it.
+#[must_use]
+#[allow(clippy::arithmetic_side_effects)]
+pub fn parse_iso8601(text: &str) -> Option<u64> {
+    let b = text.as_bytes();
+    let shape_ok = b.len() == 20
+        && b.get(4) == Some(&b'-')
+        && b.get(7) == Some(&b'-')
+        && b.get(10) == Some(&b'T')
+        && b.get(13) == Some(&b':')
+        && b.get(16) == Some(&b':')
+        && b.get(19) == Some(&b'Z');
+    if !shape_ok {
+        return None;
+    }
+    let num = |from: usize, to: usize| -> Option<i64> {
+        let s = text.get(from..to)?;
+        if !s.bytes().all(|c| c.is_ascii_digit()) {
+            return None;
+        }
+        s.parse().ok()
+    };
+    let (year, month, day) = (num(0, 4)?, num(5, 7)?, num(8, 10)?);
+    let (hh, mm, ss) = (num(11, 13)?, num(14, 16)?, num(17, 19)?);
+    if year < 1970
+        || !(1..=12).contains(&month)
+        || !(1..=31).contains(&day)
+        || hh > 23
+        || mm > 59
+        || ss > 59
+    {
+        return None;
+    }
+    let y = year - i64::from(month <= 2);
+    let era = y.div_euclid(400);
+    let yoe = y.rem_euclid(400);
+    let mp = if month > 2 { month - 3 } else { month + 9 };
+    let doy = (153 * mp + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    let secs = days * 86_400 + hh * 3600 + mm * 60 + ss;
+    let secs = u64::try_from(secs).ok()?;
+    // Reject dates that do not exist (2026-02-30 would otherwise roll into March).
+    (iso8601(secs) == text).then_some(secs)
+}

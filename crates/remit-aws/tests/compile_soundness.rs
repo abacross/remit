@@ -11,7 +11,7 @@
 )]
 
 use proptest::prelude::*;
-use remit_aws::{CompileError, MAX_POLICY_CHARS, compile_session_policy, iso8601};
+use remit_aws::{CompileError, MAX_POLICY_CHARS, compile_session_policy, iso8601, parse_iso8601};
 use remit_core::{Warrant, WarrantSpec};
 use serde_json::{Value, json};
 
@@ -205,4 +205,27 @@ fn a_typical_warrant_compiles_to_the_expected_policy() {
         compile_session_policy(&w).unwrap(),
         r#"{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:GetObject"],"Resource":["arn:aws:s3:::reports/*"],"Condition":{"DateGreaterThanEquals":{"aws:CurrentTime":"2026-09-21T14:13:20Z"},"DateLessThanEquals":{"aws:CurrentTime":"2026-09-21T15:13:20Z"}}}]}"#
     );
+}
+
+proptest! {
+    #[test]
+    fn parsing_undoes_formatting(s in 0u64..253_402_300_799) {
+        prop_assert_eq!(parse_iso8601(&iso8601(s)), Some(s));
+    }
+}
+
+#[test]
+fn parsing_refuses_anything_else() {
+    for bad in [
+        "2026-02-30T00:00:00Z",
+        "2026-09-24T20:03:40.123Z",
+        "2026-09-24T20:03:40+00:00",
+        "2026-9-24T20:03:40Z",
+        "1969-12-31T23:59:59Z",
+        "2026-09-24 20:03:40Z",
+        "",
+    ] {
+        assert_eq!(parse_iso8601(bad), None, "{bad}");
+    }
+    assert_eq!(parse_iso8601("2026-09-24T20:03:40Z"), Some(1_790_280_220));
 }
