@@ -11,7 +11,8 @@
 
 use proptest::prelude::*;
 use remit_core::{
-    ChainError, IssuerKey, KeyId, SignatureError, SignedWarrant, Warrant, WarrantSpec, verify_chain,
+    ChainError, IssuerKey, KeyId, SignatureError, SignedWarrant, Warrant, WarrantSpec,
+    decode_chain, encode_chain, verify_chain,
 };
 
 fn key(n: u8) -> IssuerKey {
@@ -294,4 +295,30 @@ fn every_rule_of_section_5_3_is_enforced() {
         verify_chain(&usurped, &roots),
         Err(ChainError::Attenuation { index: 1, .. })
     ));
+}
+
+#[test]
+fn a_chain_survives_transport_and_nothing_else_does() {
+    let f = fixture();
+    let links = chain(&f, S3_READ, &f.agent);
+    let bytes = encode_chain(&links);
+    assert_eq!(decode_chain(&bytes).unwrap(), links);
+    let mut trailing = bytes.clone();
+    trailing.push(0);
+    assert!(decode_chain(&trailing).is_err());
+    assert!(decode_chain(&bytes[..bytes.len() - 1]).is_err());
+    let mut tampered = bytes.clone();
+    let last = tampered.len() - 70;
+    tampered[last] ^= 1;
+    assert!(decode_chain(&tampered).is_err());
+}
+
+proptest! {
+    #[test]
+    fn arbitrary_bytes_never_panic_the_chain_decoder(bytes in proptest::collection::vec(any::<u8>(), 0..300)) {
+        let _ = decode_chain(&bytes);
+        let mut prefixed = b"REMITCv1".to_vec();
+        prefixed.extend_from_slice(&bytes);
+        let _ = decode_chain(&prefixed);
+    }
 }

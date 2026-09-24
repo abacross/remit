@@ -193,6 +193,10 @@ For every byte string a decoder accepts, encoding the result gives back the same
 A signed warrant travels as its canonical encoding followed immediately by its 64 signature bytes.
 The encoding is self-delimiting, so the signature is the last 64 bytes and everything before them must decode by section 5.4.
 
+A chain travels as the 8 bytes `REMITCv1`, a 4-byte big-endian count of links (at most 16), and each signed warrant in order as a 4-byte big-endian length followed by its transport bytes.
+Nothing may follow the last link.
+Decoding a chain verifies every link's signature; checking the chain itself is section 5.3.
+
 ## 6. Completeness
 
 This is the property that distinguishes Remit, and it is stated with its assumptions rather than without them.
@@ -212,7 +216,8 @@ The claim is only as strong as its assumptions, which are part of the claim and 
 1. The managed principals can obtain cloud credentials only through the broker. On AWS this is enforced by role trust policies that require `sts:SourceIdentity`, and it must itself be verified by the reconciler on every run, not assumed.
 2. The cloud record covers the actions in question. On AWS, management events are recorded by default and data events only when configured; an action class the record does not cover is outside the claim, and the result names the classes it covered.
 3. The cloud record for the window is itself complete and unaltered. On AWS, CloudTrail log file integrity validation is the evidence, and a run without it can at best report `complete, unvalidated`.
-4. The window has closed long enough for delivery. **Open:** the settling period, to be set from measurement rather than from documentation alone.
+4. The action was taken by the managed session itself. AWS: "The source identity information is not captured by CloudTrail when an AWS service or service-linked role carries out an action on behalf of a federated or workforce identity" (IAM guide, monitor and control actions taken with assumed roles). Actions a service takes on a session's behalf are outside the claim, and the reconciler reports the classes it saw.
+5. The window has closed long enough for delivery. **Open:** the settling period, to be set from measurement rather than from documentation alone.
 
 ## 7. What Remit does not claim
 

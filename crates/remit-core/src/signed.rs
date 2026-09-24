@@ -277,3 +277,64 @@ pub fn verify_chain<'a>(
     }
     Ok(links.last().map_or(root, SignedWarrant::warrant))
 }
+
+/// First bytes of a chain in transport (SPEC section 5.5).
+pub const CHAIN_MAGIC: &[u8; 8] = b"REMITCv1";
+/// The most links a chain may carry.
+pub const MAX_CHAIN: usize = 16;
+
+/// Encodes a chain for transport (SPEC section 5.5).
+#[must_use]
+pub fn encode_chain(links: &[SignedWarrant]) -> Vec<u8> {
+    let mut out = CHAIN_MAGIC.to_vec();
+    out.extend_from_slice(&u32::try_from(links.len()).unwrap_or(u32::MAX).to_be_bytes());
+    for link in links {
+        let t = link.to_transport();
+        out.extend_from_slice(&u32::try_from(t.len()).unwrap_or(u32::MAX).to_be_bytes());
+        out.extend_from_slice(&t);
+    }
+    out
+}
+
+/// Decodes a chain from transport, verifying every link's signature. Whether the chain is
+/// valid as a chain is [`verify_chain`]'s question, not this one's.
+///
+/// # Errors
+///
+/// A wrong magic, a count over [`MAX_CHAIN`], a length past the end, trailing bytes, or
+/// any link that is not a valid signed warrant.
+pub fn decode_chain(bytes: &[u8]) -> Result<Vec<SignedWarrant>, SignatureError> {
+    let rest = bytes
+        .strip_prefix(CHAIN_MAGIC.as_slice())
+        .ok_or(SignatureError::Truncated)?;
+    let (count, mut rest) = split_u32(rest)?;
+    if count > MAX_CHAIN {
+        return Err(SignatureError::Truncated);
+    }
+    let mut links = Vec::with_capacity(count);
+    for _ in 0..count {
+        let (len, tail) = split_u32(rest)?;
+        if tail.len() < len {
+            return Err(SignatureError::Truncated);
+        }
+        let (link, tail) = tail.split_at(len);
+        links.push(SignedWarrant::from_transport(link)?);
+        rest = tail;
+    }
+    if !rest.is_empty() {
+        return Err(SignatureError::Truncated);
+    }
+    Ok(links)
+}
+
+fn split_u32(bytes: &[u8]) -> Result<(usize, &[u8]), SignatureError> {
+    if bytes.len() < 4 {
+        return Err(SignatureError::Truncated);
+    }
+    let (head, tail) = bytes.split_at(4);
+    let n = u32::from_be_bytes(head.try_into().map_err(|_| SignatureError::Truncated)?);
+    Ok((
+        usize::try_from(n).map_err(|_| SignatureError::Truncated)?,
+        tail,
+    ))
+}
