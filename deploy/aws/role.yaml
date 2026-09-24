@@ -1,0 +1,49 @@
+# The role a Remit broker assumes on a warrant's behalf (SPEC 8.1, ADR 0006).
+#
+# Only the broker's principal may assume it, and only while setting a source identity of
+# the warrant-identifier form, so no session on this role exists without a warrant stamped
+# on it; AWS persists that identity through role chaining and records it on every action
+# in CloudTrail (IAM guide, monitor and control actions taken with assumed roles). The
+# role's policy is the ceiling; each warrant's session policy narrows it.
+#
+#   aws cloudformation deploy --stack-name remit-agent-readonly --template-file deploy/aws/role.yaml \
+#     --capabilities CAPABILITY_NAMED_IAM --parameter-overrides BrokerPrincipalArn=<arn>
+#
+# Reverse: delete the stack. Nothing else depends on it.
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Remit broker role, read-only ceiling (Remit ADR 0006)
+Parameters:
+  BrokerPrincipalArn:
+    Type: String
+    Description: The IAM principal the broker runs as; the only principal that may assume this role.
+    AllowedPattern: "arn:aws:iam::[0-9]{12}:(user|role)/.+"
+  RoleName:
+    Type: String
+    Default: remit-agent-readonly
+  CeilingPolicyArn:
+    Type: String
+    Default: arn:aws:iam::aws:policy/ReadOnlyAccess
+    Description: The most any warrant on this role can allow.
+Resources:
+  Role:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Ref RoleName
+      Description: Assumed only by the Remit broker, only with a warrant id as source identity.
+      MaxSessionDuration: 3600
+      ManagedPolicyArns: [!Ref CeilingPolicyArn]
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: BrokerWithWarrantOnly
+            Effect: Allow
+            Principal: { AWS: !Ref BrokerPrincipalArn }
+            Action: ["sts:AssumeRole", "sts:SetSourceIdentity"]
+            Condition:
+              StringLike:
+                sts:SourceIdentity: "rw1-*"
+      Tags:
+        - { Key: managed-by, Value: remit }
+Outputs:
+  RoleArn:
+    Value: !GetAtt Role.Arn
