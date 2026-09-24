@@ -1,0 +1,66 @@
+{
+  "additionalEventData": {
+    "ExtendedRequestId": "MTp1cy1lYXN0LTE6UzoxNzkwMjgwMjIzNzU1OlI6ZlpWQzlib24=",
+    "RequestDetails": {
+      "awsServingRegion": "us-east-1",
+      "endpointType": "regional"
+    }
+  },
+  "awsRegion": "us-east-1",
+  "eventCategory": "Management",
+  "eventID": "a371b3a4-ef65-4874-816d-5692dedf8175",
+  "eventName": "AssumeRole",
+  "eventSource": "sts.amazonaws.com",
+  "eventTime": "2026-09-24T20:03:43Z",
+  "eventType": "AwsApiCall",
+  "eventVersion": "1.11",
+  "managementEvent": true,
+  "readOnly": true,
+  "recipientAccountId": "111122223333",
+  "requestID": "a17b9220-a6f1-48fe-b162-dd12699e566d",
+  "requestParameters": {
+    "durationSeconds": 3566,
+    "policy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":[\"s3:GetBucketLocation\"],\"Resource\":[\"arn:aws:s3:::abacross.com\"],\"Condition\":{\"DateGreaterThanEquals\":{\"aws:CurrentTime\":\"2026-09-24T20:03:08Z\"},\"DateLessThanEquals\":{\"aws:CurrentTime\":\"2026-09-24T21:03:08Z\"}}}]}",
+    "roleArn": "arn:aws:iam::111122223333:role/remit-agent-readonly",
+    "roleSessionName": "rw1-w27scolum43jyvkjja4g4tb7rgsgnal7",
+    "sourceIdentity": "rw1-w27scolum43jyvkjja4g4tb7rgsgnal7"
+  },
+  "resources": [
+    {
+      "ARN": "arn:aws:iam::111122223333:role/remit-agent-readonly",
+      "accountId": "111122223333",
+      "type": "AWS::IAM::Role"
+    }
+  ],
+  "responseElements": {
+    "assumedRoleUser": {
+      "arn": "arn:aws:sts::111122223333:assumed-role/remit-agent-readonly/rw1-w27scolum43jyvkjja4g4tb7rgsgnal7",
+      "assumedRoleId": "AROAEXAMPLEEXAMPLE:rw1-w27scolum43jyvkjja4g4tb7rgsgnal7"
+    },
+    "credentials": {
+      "accessKeyId": "ASIAEXAMPLEEXAMPLE00",
+      "expiration": "2026-09-24T21:03:09Z",
+      "sessionToken": "IQoJb3JpZ2luX2VjEBQaCXVzLWVhc3QtMSJHMEUCIEj8fncQPQJheSXH7Jq5Kknsw5cHfZwmIogWjkHhveiNAiEAx/8pyJ1OdGq3etSUN6l5uoFpv6dG5BrElujSoQbOXPkq6AMI3f//////////ARADGgwyNTgwNzAzMzA5OTMiDPseLqimxKlfdZXM3iq8A36r1Sg6/7XukAwSnpv8XVLds9Gf8c13uAlecgyXqyMpstdGBJE3l8dxgkpENNLINKz0gY/q7mf5fji7FaXsDs0jXCX6A5wE9MorQWnVl05ynn9bxv7uoxjHPJQUE8X7474kKZiVYneYUhJXz34clDgpKh7w5YZKkpuGXHniEAQyMMQWaK921McgKqOxmvFPSdMqrbF6DsM+oXHA5YVVWgsbvKHF5ecpLgFXTccJMQyGO18n2UTiDnlhHcO/mruidRpXrsFLj8On1jkFCBBTi5TH8Mz04bsouSOX41snMxjWYfl2MBmlwvWb4ucH522vajez6V2eiVaRpG/BgQIe3cuY0aKloEKFb10FqQAFoPz4r60P0Jpfm3By9DgbS72jVXSboW17xiMHEzYrZT6kSITl0mfvMC1RXtEs+IL0ryK/ZzOW3MMLFIv7g6u4G88x2Kh4ANWLRLuth84qymy7uQR7NFuJO4pXlPW/czvFRz/uNJKzbS0V7u3X2AmIJ8vMgy5bca7MCa4keceaFbdv9CYqL3pEwHoZ6XkCVUfODgP+vAvwATkIQwl37tzFTWiM9sy7MUzfzKpvOGfptDCfhNbVBjqiAdYNT0sFrdy2FuTg7gQaAA+iiqfSe8yU9NlJNqubmmzkYi7LXP4IKpHZhsHI+V4OuA0+ltxg5iLJCDSxxkVb2AGjMwKE8i82H74KWTZaCOUJDf8jjWU2A8sQ2UR3S2Ab2Lo8GJivLXvGzXXMU5E9Y6g6YNjyoC85B0+VTWWXNEN3+M/T6f/EPJceqOxADD3rmNNAT92bx5fAHJ7Jmzhap+GRKw=="
+    },
+    "packedPolicySize": 24,
+    "sessionTokenSize": 1016,
+    "sessionTokenUtilization": 24,
+    "sourceIdentity": "rw1-w27scolum43jyvkjja4g4tb7rgsgnal7"
+  },
+  "sourceIPAddress": "203.0.113.10",
+  "tlsDetails": {
+    "cipherSuite": "TLS_AES_128_GCM_SHA256",
+    "clientProvidedHostHeader": "sts.us-east-1.amazonaws.com",
+    "keyExchange": "X25519MLKEM768",
+    "tlsVersion": "TLSv1.3"
+  },
+  "userAgent": "aws-sdk-rust/1.6.0 ua/2.1 api/sts/1.117.0 os/linux lang/rust/1.98.1 m/E,n md/http#hyper-1.x",
+  "userIdentity": {
+    "accessKeyId": "AKIAEXAMPLEEXAMPLE00",
+    "accountId": "111122223333",
+    "arn": "arn:aws:iam::111122223333:user/admin",
+    "principalId": "AIDAEXAMPLEEXAMPLE",
+    "type": "IAMUser",
+    "userName": "admin"
+  }
+}

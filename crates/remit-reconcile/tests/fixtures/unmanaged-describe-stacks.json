@@ -1,0 +1,33 @@
+{
+  "awsRegion": "us-east-1",
+  "eventCategory": "Management",
+  "eventID": "566c0c0d-deca-4112-b86c-6da01ba6a7e7",
+  "eventName": "DescribeStacks",
+  "eventSource": "cloudformation.amazonaws.com",
+  "eventTime": "2026-09-24T20:03:37Z",
+  "eventType": "AwsApiCall",
+  "eventVersion": "1.11",
+  "managementEvent": true,
+  "readOnly": true,
+  "recipientAccountId": "111122223333",
+  "requestID": "e06bc97a-58ba-4be2-991b-8c636a8dc0cb",
+  "requestParameters": {
+    "stackName": "remit-agent-readonly"
+  },
+  "responseElements": null,
+  "sourceIPAddress": "203.0.113.10",
+  "tlsDetails": {
+    "cipherSuite": "TLS_AES_128_GCM_SHA256",
+    "clientProvidedHostHeader": "cloudformation.us-east-1.amazonaws.com",
+    "tlsVersion": "TLSv1.3"
+  },
+  "userAgent": "aws-cli/2.15.25 Python/3.11.8 Linux/5.15.133.1-microsoft-standard-WSL2 exe/x86_64.ubuntu.22 prompt/off command/cloudformation.describe-stacks",
+  "userIdentity": {
+    "accessKeyId": "AKIAEXAMPLEEXAMPLE00",
+    "accountId": "111122223333",
+    "arn": "arn:aws:iam::111122223333:user/admin",
+    "principalId": "AIDAEXAMPLEEXAMPLE",
+    "type": "IAMUser",
+    "userName": "admin"
+  }
+}
