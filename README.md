@@ -35,6 +35,7 @@ Early. The specification, the threat model and the core warrant semantics exist;
 - The claims that matter are tested as properties, not examples: containment is sound (checked against brute force), and a delegated warrant never permits what its parent does not.
 - Rust at a pinned toolchain, no `unsafe`, Clippy at pedantic level with warnings as errors, and as few dependencies as possible, each justified (ADR 0002).
 - `bash scripts/ci.sh` runs every check; nothing merges without it passing.
+- The same checks run before every commit: `git config core.hooksPath .githooks` once per clone.
 
 ## Licence
 

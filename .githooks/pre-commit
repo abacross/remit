@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Every commit passes the whole of CI first (scripts/ci.sh): a few seconds now instead of
+# a broken main later. Enabled per clone with: git config core.hooksPath .githooks
+exec bash "$(git rev-parse --show-toplevel)/scripts/ci.sh"
