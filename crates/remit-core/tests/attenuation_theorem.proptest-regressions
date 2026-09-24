@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 9727340fdb4bd8fe3e0418325728e3bb9ced195deab9a0d028b33213429839e0 # shrinks to pg = [(["a"], ["a"])], choices = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], pw = (96, 100), trim = (3, 1)
+cc 275269e4bf8c748ec66e3c9a3184cb56d9bc11f99c726a503b483d13b3400640 # shrinks to pg = [(["*"], ["?"])], cg = [(["a"], ["*"])], pw = (0, 166), cw = (0, 50), pdepth = 2, cdepth = 0
