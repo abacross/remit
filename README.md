@@ -26,7 +26,7 @@ Early. The specification, the threat model, the warrant semantics, signatures an
 | `remit-core`: warrants, patterns, the authorization decision, attenuation, canonical identity | Implemented, property-tested |
 | Signed warrants, strict decoding, delegation chains | Implemented, property-tested (ADR 0003) |
 | Session policy compiler (AWS) | Implemented, property-tested, checked against AWS's policy simulator |
-| AWS broker and `remit` command | Implemented; first live session pending the role |
+| AWS broker and `remit` command | Implemented; first live session run on 2026-09-24, CloudTrail carries the warrant id |
 | Reconciler | Not started |
 | Witnessed log | Not started |
 

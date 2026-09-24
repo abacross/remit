@@ -21,3 +21,12 @@ Every request whose resource differed from the warrant's only in the case of its
 This is evidence for the one soundness assumption SPEC section 8.3 names (resource case), for these five services and in the simulator; it is not a guarantee for every service or for live enforcement, and the reconciler remains the backstop.
 
 The 16 rejected inputs are ARNs uppercased from `arn:aws:` onward, which AWS does not accept as requests at all.
+
+## Live session, 2026-09-24
+
+The first session through `remit run`, on role `remit-agent-readonly` (deploy/aws/role.yaml, ceiling ReadOnlyAccess), with a warrant signed by a throwaway test root key allowing exactly `s3:GetBucketLocation` on one bucket.
+
+- The role refused `AssumeRole` with no source identity ("not authorized to perform: sts:AssumeRole") and with a source identity not of the warrant form ("not authorized to perform: sts:SetSourceIdentity"), both from the account's administrator user.
+- Through `remit run`: `GetBucketLocation` succeeded; `GetBucketVersioning`, which the role's ceiling allows, was refused by AWS "because no session policy allows the s3:GetBucketVersioning action"; the session's principal was `assumed-role/remit-agent-readonly/rw1-w27scolum43jyvkjja4g4tb7rgsgnal7`.
+- CloudTrail event history (us-east-1) recorded `GetBucketLocation` with `userIdentity.sessionContext.sourceIdentity` equal to the warrant identifier, and the three `AssumeRole` events with the same `sourceIdentity`, within about a minute of the calls.
+- **Open:** the refused `GetBucketVersioning` did not appear in event history in either region within about 25 minutes. Whether AWS records every refusal of this kind, or only later, is not established; a refusal is not an action taken, so the completeness claim is unaffected, but attempt visibility is not yet a property Remit can state.
