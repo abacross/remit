@@ -12,6 +12,7 @@ authors.workspace = true
 workspace = true
 
 [dependencies]
+remit-core = { path = "../remit-core" }
 ed25519-dalek = "3.0.0"
 sha2 = "0.11.0"
 

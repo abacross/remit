@@ -83,6 +83,23 @@ impl KeyId {
         })
     }
 
+    /// The identifier of a raw 32-byte Ed25519 public key.
+    ///
+    /// # Errors
+    ///
+    /// Bytes that are not a public key.
+    pub fn from_public_key(bytes: &[u8; 32]) -> Result<Self, SignatureError> {
+        let key = VerifyingKey::from_bytes(bytes)
+            .map_err(|_| SignatureError::KeyId(base32_lower(bytes)))?;
+        Ok(Self::from_key(key))
+    }
+
+    /// The raw 32-byte public key.
+    #[must_use]
+    pub fn public_key(&self) -> [u8; 32] {
+        self.key.to_bytes()
+    }
+
     fn from_key(key: VerifyingKey) -> Self {
         Self {
             text: format!("{KEY_PREFIX}{}", base32_lower(key.as_bytes())),
@@ -338,6 +355,9 @@ fn split_u32(bytes: &[u8]) -> Result<(usize, &[u8]), SignatureError> {
         tail,
     ))
 }
+
+/// The domain reconciliation results are signed in (SPEC section 6.6).
+pub const RESULT_DOMAIN: &[u8; 8] = b"REMITRv1";
 
 /// Signs `message` under an 8-byte domain other than a warrant's (`REMITWv1`), so a
 /// signature made for one kind of document can never be presented as another. The

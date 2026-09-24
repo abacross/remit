@@ -363,7 +363,7 @@ async fn run(args: RunArgs) -> Result<ExitCode> {
 }
 
 /// The domain report signatures are made in (`remit_core::sign_in_domain`).
-const REPORT_DOMAIN: &[u8; 8] = b"REMITRv1";
+const REPORT_DOMAIN: &[u8; 8] = remit_core::RESULT_DOMAIN;
 
 /// IAM returns trust policies percent-encoded (RFC 3986).
 fn percent_decode(s: &str) -> Result<String> {

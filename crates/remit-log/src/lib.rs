@@ -10,12 +10,16 @@
 
 pub mod base64;
 pub mod checkpoint;
+pub mod entry;
 pub mod merkle;
 pub mod note;
+pub mod witness;
 
 pub use checkpoint::{Checkpoint, CheckpointError, TrustPolicy, TrustedCheckpoint, open};
+pub use entry::{ENTRY_MAGIC, Entry, EntryError, MAX_ENTRY_BYTES};
 pub use merkle::{
     Hash, ProofError, consistency_proof, empty_root, inclusion_proof, leaf_hash, node_hash, root,
     verify_consistency, verify_inclusion,
 };
 pub use note::{KeyKind, Note, NoteError, NoteSigner, SignatureLine, Verified, VerifierKey};
+pub use witness::{MAX_PROOF_LINES, Witness, WitnessError};

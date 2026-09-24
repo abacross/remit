@@ -39,7 +39,7 @@ pub use attenuation::{AttenuationError, check as check_attenuation};
 pub use decode::DecodeError;
 pub use pattern::{ActionPattern, PatternError, ResourcePattern};
 pub use signed::{
-    ChainError, IssuerKey, KeyId, SignatureError, SignedWarrant, decode_chain, encode_chain,
-    sign_in_domain, verify_chain, verify_in_domain,
+    ChainError, IssuerKey, KeyId, RESULT_DOMAIN, SignatureError, SignedWarrant, decode_chain,
+    encode_chain, sign_in_domain, verify_chain, verify_in_domain,
 };
 pub use warrant::{Grant, Identifier, Request, Warrant, WarrantError, WarrantId, WarrantSpec};
