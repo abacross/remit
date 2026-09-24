@@ -75,9 +75,9 @@ struct ReconcileArgs {
     /// End of the window.
     #[arg(long)]
     to: String,
-    /// Seconds after the window's end before events are taken as delivered. The first live
-    /// session's refused call took between 25 and 85 minutes to appear (conformance/RESULTS.md).
-    #[arg(long, default_value_t = 7200)]
+    /// Seconds after the window's end before events are taken as delivered (SPEC section 6,
+    /// assumption 5); the report states the value used.
+    #[arg(long, default_value_t = remit_reconcile::DEFAULT_SETTLE_SECONDS)]
     settle_seconds: u64,
     /// The reconciler's seed file, which signs the report.
     #[arg(long)]

@@ -39,6 +39,12 @@ pub enum EventSource {
     ValidatedTrail,
 }
 
+/// The default settling period (SPEC section 6, assumption 5): two hours. AWS says
+/// `CloudTrail` "typically delivers logs within an average of about 5 minutes of an API
+/// call. This time is not guaranteed."; the first live session's refused call took between
+/// 25 and 85 minutes to appear in event history (conformance/RESULTS.md).
+pub const DEFAULT_SETTLE_SECONDS: u64 = 7200;
+
 /// Everything a run takes (SPEC 6.1).
 #[derive(Debug)]
 pub struct Input<'a> {
@@ -126,6 +132,8 @@ pub struct Report {
     pub run_at: String,
     /// Where the events came from.
     pub source: EventSource,
+    /// The settling period the verdict assumed (assumption 5).
+    pub settle_seconds: u64,
     /// The regions covered; the verdict speaks for these only (SPEC 6.1).
     pub regions: Vec<String>,
     /// Inputs refused before reconciliation, such as a chain that did not verify; filled by
@@ -231,6 +239,7 @@ pub fn reconcile(input: &Input<'_>) -> Report {
         to: remit_aws::iso8601(input.to),
         run_at: remit_aws::iso8601(input.now),
         source: input.source,
+        settle_seconds: input.settle_seconds,
         regions: input.regions.to_vec(),
         refused_inputs: Vec::new(),
         roles: input

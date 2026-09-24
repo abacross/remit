@@ -18,7 +18,7 @@ What Remit does not claim is part of the design, not a footnote: see `docs/SPEC.
 
 ## Status
 
-Early. The specification, the threat model, the warrant semantics, signatures and delegation chains exist; the broker, the reconciler and the log do not yet.
+Early. The specification, the threat model, warrants, signatures and delegation chains, the AWS broker and the reconciler exist and have run against a real account; the witnessed log does not yet.
 
 | Part | State |
 | --- | --- |
@@ -27,7 +27,7 @@ Early. The specification, the threat model, the warrant semantics, signatures an
 | Signed warrants, strict decoding, delegation chains | Implemented, property-tested (ADR 0003) |
 | Session policy compiler (AWS) | Implemented, property-tested, checked against AWS's policy simulator |
 | AWS broker and `remit` command | Implemented; first live session run on 2026-09-24, CloudTrail carries the warrant id |
-| Reconciler | Not started |
+| Reconciler and `remit reconcile` | Implemented; first real run on 2026-09-24 over 384 events, verdict incomplete for three real one-second session overruns, now prevented (conformance/RESULTS.md) |
 | Witnessed log | Not started |
 
 ## Engineering

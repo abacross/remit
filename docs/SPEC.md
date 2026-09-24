@@ -217,7 +217,7 @@ The claim is only as strong as its assumptions, which are part of the claim and 
 2. The cloud record covers the actions in question. On AWS, management events are recorded by default and data events only when configured; an action class the record does not cover is outside the claim, and the result names the classes it covered.
 3. The cloud record for the window is itself complete and unaltered. On AWS, CloudTrail log file integrity validation is the evidence, and a run without it can at best report `complete, unvalidated`.
 4. The action was taken by the managed session itself. AWS: "The source identity information is not captured by CloudTrail when an AWS service or service-linked role carries out an action on behalf of a federated or workforce identity" (IAM guide, monitor and control actions taken with assumed roles). Actions a service takes on a session's behalf are outside the claim, and the reconciler reports the classes it saw.
-5. The window has closed long enough for delivery. **Open:** the settling period, to be set from measurement rather than from documentation alone.
+5. The window has closed long enough for delivery: the **settling period**, two hours by default, stated in every result. AWS: "CloudTrail typically delivers logs within an average of about 5 minutes of an API call. This time is not guaranteed" (CloudTrail user guide, how CloudTrail works). Measured: in the first live session, a refused call was not yet in event history about 25 minutes after it was made and was by about 85 minutes (conformance/RESULTS.md). Two hours covers that with margin; it is a parameter, not a guarantee, and an event delivered later than the settling period is outside the claim of a result already made. Re-running a window later is how a result is confirmed.
 
 ### 6.1 Inputs
 
@@ -277,8 +277,13 @@ Any failure makes the verdict **incomplete**, with every finding listed.
 ### 6.6 The result
 
 A result is a JSON document written once and signed as written: the signature is over the exact bytes, and a verifier checks it before parsing.
-It states the window, the event source and its integrity evidence, the managed roles and whether each trust policy was as required, the verdict, every finding with its event identifier, the per-warrant event counts, and the unmanaged activity by principal.
+It states the window, the event source and its integrity evidence, the settling period, the regions covered, the inputs refused, the managed roles and whether each trust policy was as required, the verdict, every finding with its event identifier, the per-warrant event counts, and the unmanaged activity by principal.
 The reconciler signs with its own key, which is not a warrant issuer's key.
+
+The signature is Ed25519 over the 8 bytes `REMITRv1` followed by the result's exact bytes.
+The prefix separates the two things Remit signs: a warrant's signed bytes begin with `REMITWv1` (section 3.6), so a signature over a result can never be presented as a signature over a warrant, or the reverse, and a signer refuses to sign in the warrant domain through the result interface.
+The signature travels beside the result as a JSON file, `<result>.sig`: `{"domain": "REMITRv1", "key": <the signer's key identifier, section 5.1>, "signature": <64 bytes, lowercase hex>}`.
+A verifier is given the key it expects, refuses any other domain or key, and checks the signature with the strict rules of section 5.2 before parsing the result.
 
 ## 7. What Remit does not claim
 

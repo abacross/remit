@@ -113,6 +113,8 @@ fn the_live_session_with_the_margin_reconciles_clean() {
 fn an_unsettled_window_is_provisional() {
     let r = run(&events(|_| {}), &fixture("trust-policy.json"), 60);
     assert_eq!(r.verdict, Verdict::Provisional);
+    // The report says which settling period its verdict assumed.
+    assert!(r.to_json().unwrap().contains("\"settle_seconds\": 900"));
 }
 
 #[test]
