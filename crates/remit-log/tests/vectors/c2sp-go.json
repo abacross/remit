@@ -1,0 +1,9 @@
+{
+ "body": "log.example.com/remit-test\n8\nXcnaeacGWamtVZy3Ad7ZoqudgjqtL0lgz+Nw7/RgQyg=\n",
+ "cosigned": "log.example.com/remit-test\n8\nXcnaeacGWamtVZy3Ad7ZoqudgjqtL0lgz+Nw7/RgQyg=\n\n— log.example.com/remit-test sFf4d+JEP0LLgGzs4OGgcIZflJZBKAPsyNcyfSJX+vxg+gl0ItLRWpfYdPas1FwiPtZOpMIcbFLcC775o2NFj02fPAc=\n— witness.example.com/w1 1jInZgAAAABqtZFQQbRb0DKOHzBA82e6wvgcXwBZCPuzgiPw9wQ497+dvHN2YKptgFhjkfjxHRO4Hgtm4brQzZ5vc/450pRCzC3WDw==\n",
+ "log_seed_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+ "log_vkey": "log.example.com/remit-test+b057f877+AQOhB7/zzhC+HXDdGOdLwJln5NYwm6UNXx3chmQSVTG4",
+ "signed": "log.example.com/remit-test\n8\nXcnaeacGWamtVZy3Ad7ZoqudgjqtL0lgz+Nw7/RgQyg=\n\n— log.example.com/remit-test sFf4d+JEP0LLgGzs4OGgcIZflJZBKAPsyNcyfSJX+vxg+gl0ItLRWpfYdPas1FwiPtZOpMIcbFLcC775o2NFj02fPAc=\n",
+ "witness_seed_hex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf",
+ "witness_vkey": "witness.example.com/w1+d6322766+BE/QmczUfXiT3+nsJEFOyw2bVCAjKq0w2RxGW+M8vmXE"
+}
