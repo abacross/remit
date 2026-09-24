@@ -265,3 +265,4 @@ The one assumption that is not a documented fact is resource case: AWS does not 
 Until a per-service table exists, the reconciler is the backstop: an event whose resource differs only in case from what the warrant permits is reported as outside it.
 
 **Conformance.** Beyond the argument, compiled policies are checked against AWS's own evaluator, the IAM policy simulator, on generated warrants and requests: every request the simulator allows must be one the warrant permits.
+The first run, on 2026-09-24, found no violation in 144 decisions across five services, and the simulator treated resource case as significant in every probe; `conformance/RESULTS.md` has the detail and its limits.
