@@ -223,7 +223,7 @@ The claim is only as strong as its assumptions, which are part of the claim and 
 
 A reconciliation run takes:
 
-1. the warrant chains it may join to, each verified against the trusted roots (section 5.3); a chain that does not verify is not a warrant for this run and is reported;
+1. the warrants it may join to: those the log establishes at a checkpoint the reconciler's trust policy accepts, each with a chain rebuilt from logged entries that verifies against the trusted roots (sections 5.3 and 9.4); a logged warrant whose chain does not verify is not a warrant for this run and is reported;
 2. the managed roles: the role ARNs the broker assumes, and each role's trust policy as observed at the time of the run;
 3. the provider's events for a window `[from, to]`, from **every region** the account uses, and a statement of where they came from and what evidence of their integrity exists. CloudTrail files an event under the region that served it, not the caller's: in the first live session, a refused S3 call on a bucket in us-west-2 was recorded there, while the session's other calls were recorded in us-east-1 (conformance/RESULTS.md). A run that covered fewer regions names the ones it covered, and its verdict speaks for those regions only;
 4. the time of the run.
@@ -385,7 +385,7 @@ A witness cosigns only checkpoints consistent with every one it cosigned before,
 
 The set `L` of section 6 is the set of warrants whose entries are included in a checkpoint the reconciler's trust policy accepts.
 A result names that checkpoint (origin, size and root), and an event carrying an identifier that is not in `L` is an unwarranted event, whatever else the reconciler may have been shown.
-The reconciler appends each result it signs.
+Every signed result is appended to the log as a result entry, with its bytes published beside it (section 9.5).
 
 ### 9.5 Serving
 

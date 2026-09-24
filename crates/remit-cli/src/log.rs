@@ -176,7 +176,7 @@ fn append(log: &mut Log, entries: &[Entry], witness: &WitnessArgs) -> Result<()>
     Ok(())
 }
 
-fn read_policy(path: &Path) -> Result<TrustPolicy> {
+pub(crate) fn read_policy(path: &Path) -> Result<TrustPolicy> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
     TrustPolicy::parse(&text).map_err(|e| format!("{}: {e}", path.display()))
 }

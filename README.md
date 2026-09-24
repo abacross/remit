@@ -18,7 +18,7 @@ What Remit does not claim is part of the design, not a footnote: see `docs/SPEC.
 
 ## Status
 
-Early. The specification, the threat model, warrants, signatures and delegation chains, the AWS broker and the reconciler exist and have run against a real account; the witnessed log does not yet.
+Early. The specification, the threat model, warrants, signatures and delegation chains, the AWS broker and the reconciler exist and have run against a real account. The witnessed log exists and the broker requires it; it has not yet been published anywhere but this machine.
 
 | Part | State |
 | --- | --- |
@@ -28,7 +28,7 @@ Early. The specification, the threat model, warrants, signatures and delegation 
 | Session policy compiler (AWS) | Implemented, property-tested, checked against AWS's policy simulator |
 | AWS broker and `remit` command | Implemented; first live session run on 2026-09-24, CloudTrail carries the warrant id |
 | Reconciler and `remit reconcile` | Implemented; first real run on 2026-09-24 over 384 events, verdict incomplete for three real one-second session overruns, now prevented (conformance/RESULTS.md) |
-| Witnessed log (`remit-log`) | In progress: the Merkle tree, checkpoints and cosignatures, tested against the RFC, transparency-dev's proof corpus and the reference Go implementations (ADR 0007) |
+| Witnessed log (`remit-log`, `remit-logstore`, `remit log`) | Implemented: RFC 9162 tree, C2SP checkpoints, cosignatures, witness and tiles, tested against the RFC, transparency-dev's proof corpus and the reference Go implementations. `remit run` refuses any chain not proven logged, and `remit reconcile` joins only to warrants the log establishes (ADR 0007). Not yet hosted |
 
 ## Engineering
 

@@ -16,12 +16,13 @@ use std::fs::{self, File, OpenOptions};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
+use remit_core::{KeyId, SignedWarrant, Warrant, verify_chain};
 use remit_log::tiles::{
     append as tile_append, bundle_path, decode_bundle, encode_bundle, tile_path,
 };
 use remit_log::{
     Checkpoint, Entry, Hash, Note, NoteSigner, TILE_WIDTH, TileError, TileSource, Tiles,
-    VerifierKey, Witness, WitnessError, base64, empty_root,
+    TrustPolicy, TrustedCheckpoint, VerifierKey, Witness, WitnessError, base64, empty_root,
 };
 use sha2::{Digest, Sha256};
 
@@ -581,6 +582,87 @@ impl Log {
         }
         Ok(())
     }
+}
+
+/// The warrants a log establishes (SPEC section 9.4): every warrant entry up to a
+/// checkpoint the policy trusts whose chain, rebuilt from logged entries alone, verifies
+/// against the trusted roots.
+#[derive(Debug)]
+pub struct LoggedWarrants {
+    /// The checkpoint they are established at.
+    pub checkpoint: TrustedCheckpoint,
+    /// The warrants, in log order.
+    pub warrants: Vec<Warrant>,
+    /// Logged warrants that are not established, with why: an untrusted root, a parent
+    /// that is not logged, a chain that does not verify.
+    pub refused: Vec<String>,
+}
+
+/// Reads the warrants a log establishes; see [`LoggedWarrants`].
+///
+/// # Errors
+///
+/// A checkpoint the policy does not trust, or a missing or corrupt bundle.
+pub fn logged_warrants(
+    dir: &LogDir,
+    policy: &TrustPolicy,
+    roots: &[KeyId],
+) -> Result<LoggedWarrants> {
+    let checkpoint = remit_log::open(&dir.checkpoint_text()?, policy)
+        .map_err(|e| StoreError::Refused(format!("checkpoint not trusted: {e}")))?;
+    let size = checkpoint.checkpoint.size();
+    let mut logged: Vec<SignedWarrant> = Vec::new();
+    let mut by_id = std::collections::BTreeMap::new();
+    let mut bundle: u64 = 0;
+    while bundle.saturating_mul(TILE_WIDTH) < size {
+        let width = size
+            .saturating_sub(bundle.saturating_mul(TILE_WIDTH))
+            .min(TILE_WIDTH);
+        for bytes in dir.bundle(bundle, width)? {
+            let entry = Entry::decode(&bytes)
+                .map_err(|e| StoreError::Corrupt(format!("entry in bundle {bundle}: {e}")))?;
+            if let Entry::Warrant(signed) = entry {
+                let id = signed.warrant().id().as_str().to_owned();
+                if let std::collections::btree_map::Entry::Vacant(slot) = by_id.entry(id) {
+                    slot.insert(signed.clone());
+                    logged.push(signed);
+                }
+            }
+        }
+        bundle = bundle.saturating_add(1);
+    }
+
+    let mut warrants = Vec::new();
+    let mut refused = Vec::new();
+    for signed in &logged {
+        let id = signed.warrant().id().as_str().to_owned();
+        let mut chain = vec![signed.clone()];
+        let mut problem = None;
+        while let Some(parent) = chain.last().and_then(|l| l.warrant().parent()) {
+            if chain.len() >= remit_core::MAX_CHAIN {
+                problem = Some("chain longer than 16 links".to_owned());
+                break;
+            }
+            let Some(p) = by_id.get(parent.as_str()) else {
+                problem = Some(format!("parent {} is not logged", parent.as_str()));
+                break;
+            };
+            chain.push(p.clone());
+        }
+        chain.reverse();
+        match problem {
+            Some(why) => refused.push(format!("{id}: {why}")),
+            None => match verify_chain(&chain, roots) {
+                Ok(w) => warrants.push(w.clone()),
+                Err(e) => refused.push(format!("{id}: {e}")),
+            },
+        }
+    }
+    Ok(LoggedWarrants {
+        checkpoint,
+        warrants,
+        refused,
+    })
 }
 
 #[cfg(test)]

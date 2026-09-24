@@ -63,9 +63,12 @@ enum Top {
 
 #[derive(Args)]
 struct ReconcileArgs {
-    /// A directory of warrant chains (`*.chain`) to join events to.
+    /// The log whose warrants events are joined to (SPEC 9.4).
     #[arg(long)]
-    chains: PathBuf,
+    log_dir: PathBuf,
+    /// The trust policy its checkpoint must satisfy.
+    #[arg(long)]
+    log_policy: PathBuf,
     /// Trusted root key identifiers.
     #[arg(long = "root", required = true)]
     roots: Vec<String>,
@@ -469,24 +472,21 @@ async fn reconcile(args: ReconcileArgs) -> Result<ExitCode> {
     let signer = read_seed(&args.key)?;
     let trusted = roots(&args.roots)?;
 
-    let mut warrants = Vec::new();
-    let mut refused = Vec::new();
-    let mut entries: Vec<PathBuf> = std::fs::read_dir(&args.chains)
-        .map_err(|e| format!("{}: {e}", args.chains.display()))?
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| p.extension().is_some_and(|x| x == "chain"))
-        .collect();
-    entries.sort();
-    for path in entries {
-        match read_chain(&path).and_then(|links| {
-            verify_chain(&links, &trusted)
-                .cloned()
-                .map_err(|e| e.to_string())
-        }) {
-            Ok(w) => warrants.push(w),
-            Err(e) => refused.push(format!("{}: {e}", path.display())),
-        }
-    }
+    // L: the warrants the log establishes at a checkpoint the policy trusts (SPEC 9.4).
+    let policy = log::read_policy(&args.log_policy)?;
+    let logged = remit_logstore::logged_warrants(
+        &remit_logstore::LogDir::new(&args.log_dir),
+        &policy,
+        &trusted,
+    )
+    .map_err(|e| e.to_string())?;
+    let warrants = logged.warrants;
+    let refused = logged.refused;
+    let position = remit_reconcile::LogPosition {
+        origin: logged.checkpoint.checkpoint.origin().to_owned(),
+        size: logged.checkpoint.checkpoint.size(),
+        root: remit_log::base64::encode(logged.checkpoint.checkpoint.root()),
+    };
 
     let config = aws_config::defaults(aws_config::BehaviorVersion::latest())
         .region(aws_config::Region::from_static("us-east-1"))
@@ -536,6 +536,7 @@ async fn reconcile(args: ReconcileArgs) -> Result<ExitCode> {
         regions: &args.regions,
     });
     report.refused_inputs = refused;
+    report.log = Some(position);
     let json = report.to_json().map_err(|e| e.to_string())?;
     let signature = remit_core::sign_in_domain(&signer, REPORT_DOMAIN, json.as_bytes())
         .map_err(|e| e.to_string())?;

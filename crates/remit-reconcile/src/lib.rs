@@ -119,6 +119,17 @@ pub enum Verdict {
     Incomplete,
 }
 
+/// A log checkpoint, as a result names it (SPEC 9.4).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct LogPosition {
+    /// The log's origin.
+    pub origin: String,
+    /// Its size.
+    pub size: u64,
+    /// Its root, in base64.
+    pub root: String,
+}
+
 /// The result of a run (SPEC 6.6).
 #[derive(Debug, Clone, Serialize)]
 pub struct Report {
@@ -139,6 +150,9 @@ pub struct Report {
     /// Inputs refused before reconciliation, such as a chain that did not verify; filled by
     /// the caller, which is where they are refused.
     pub refused_inputs: Vec<String>,
+    /// The log checkpoint the warrants were established at (SPEC 9.4); filled by the
+    /// caller, which read the log.
+    pub log: Option<LogPosition>,
     /// The managed roles and whether each trust policy held.
     pub roles: BTreeMap<String, bool>,
     /// The verdict.
@@ -242,6 +256,7 @@ pub fn reconcile(input: &Input<'_>) -> Report {
         settle_seconds: input.settle_seconds,
         regions: input.regions.to_vec(),
         refused_inputs: Vec::new(),
+        log: None,
         roles: input
             .roles
             .iter()

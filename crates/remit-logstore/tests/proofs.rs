@@ -206,3 +206,43 @@ fn policies_have_one_form() {
         assert!(TrustPolicy::parse(&bad).is_err(), "{bad}");
     }
 }
+
+#[test]
+fn the_log_establishes_only_warrants_whose_whole_chain_is_logged_and_trusted() {
+    let trusted = chain(1);
+    let untrusted_root = chain(2);
+    let orphan = chain(3);
+    let mut links = trusted.clone();
+    links.push(untrusted_root[0].clone());
+    links.push(orphan[1].clone()); // its parent is never logged
+    links.push(trusted[1].clone()); // logged twice, counted once
+    let (_, dir) = logged("establish", &links);
+    let policy = TrustPolicy::parse(&policy_text(1)).unwrap();
+    let roots = [remit_core::KeyId::parse(trusted[0].warrant().issuer().as_str()).unwrap()];
+
+    let got = remit_logstore::logged_warrants(&dir, &policy, &roots).unwrap();
+    let ids: Vec<_> = got.warrants.iter().map(|w| w.id().clone()).collect();
+    assert_eq!(
+        ids,
+        vec![
+            trusted[0].warrant().id().clone(),
+            trusted[1].warrant().id().clone()
+        ]
+    );
+    // The noise chain (root 50, two links), the untrusted root, and the orphan.
+    assert_eq!(got.refused.len(), 4, "{:#?}", got.refused);
+    assert!(got.refused.iter().any(|r| r.contains("is not logged")));
+    assert_eq!(got.checkpoint.checkpoint.size(), 7);
+
+    // Nothing is established from a checkpoint the policy does not trust.
+    let other =
+        NoteSigner::from_seed("witness.example.com/w2", KeyKind::Witness, &[7; 32]).unwrap();
+    let strict = TrustPolicy::parse(&format!(
+        "log {}\nwitness {}\nwitness {}\nquorum 2\n",
+        log_key().verifier_key().to_vkey(),
+        witness_key().verifier_key().to_vkey(),
+        other.verifier_key().to_vkey()
+    ))
+    .unwrap();
+    assert!(remit_logstore::logged_warrants(&dir, &strict, &roots).is_err());
+}
