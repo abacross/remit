@@ -69,9 +69,7 @@ fn io(path: &Path) -> impl FnOnce(std::io::Error) -> StoreError + '_ {
 ///
 /// Any I/O failure.
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
-    let dir = path
-        .parent()
-        .ok_or_else(|| StoreError::Refused(format!("{} has no directory", path.display())))?;
+    let dir = directory_of(path);
     fs::create_dir_all(dir).map_err(io(dir))?;
     let name = path
         .file_name()
@@ -84,6 +82,15 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     drop(f);
     fs::rename(&tmp, path).map_err(io(path))?;
     File::open(dir).and_then(|d| d.sync_all()).map_err(io(dir))
+}
+
+/// The directory a file is in: `.` for a bare file name, whose parent is the empty path
+/// (which cannot be opened to flush it).
+fn directory_of(path: &Path) -> &Path {
+    match path.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p,
+        _ => Path::new("."),
+    }
 }
 
 /// A log directory, read as a [`TileSource`].
@@ -266,6 +273,7 @@ pub trait Cosigner {
 /// cosignature leaves it.
 #[derive(Debug)]
 pub struct LocalWitness {
+    name: String,
     witness: Witness,
     state: PathBuf,
     clock: fn() -> u64,
@@ -288,9 +296,11 @@ impl LocalWitness {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
             Err(e) => return Err(StoreError::Io(state.to_owned(), e)),
         };
+        let name = signer.verifier_key().name().to_owned();
         let witness = Witness::new(signer, logs, &text)
             .map_err(|e| StoreError::Corrupt(format!("witness state: {e}")))?;
         Ok(Self {
+            name,
             witness,
             state: state.to_owned(),
             clock,
@@ -300,7 +310,7 @@ impl LocalWitness {
 
 impl Cosigner for LocalWitness {
     fn name(&self) -> String {
-        self.state.display().to_string()
+        self.name.clone()
     }
 
     fn add_checkpoint(&mut self, request: &str) -> core::result::Result<String, WitnessError> {
@@ -383,6 +393,12 @@ impl Log {
             signer,
             _lock: lock,
         })
+    }
+
+    /// The log's verifier key.
+    #[must_use]
+    pub fn verifier_key(&self) -> &VerifierKey {
+        self.signer.verifier_key()
     }
 
     /// The directory, for reading.
@@ -564,5 +580,21 @@ impl Log {
             write_atomic(&self.dir.path(&bundle_path(index, width)), &bytes)?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::directory_of;
+
+    #[test]
+    fn a_bare_file_name_is_in_the_current_directory() {
+        // Found end to end: `--witness-state witness.state` saved the state, then failed to
+        // flush the empty-path directory, and every cosignature was withheld.
+        assert_eq!(directory_of(Path::new("witness.state")), Path::new("."));
+        assert_eq!(directory_of(Path::new("a/b")), Path::new("a"));
+        assert_eq!(directory_of(Path::new("/b")), Path::new("/"));
     }
 }

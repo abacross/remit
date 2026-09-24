@@ -372,6 +372,8 @@ Base64 in notes, keys and checkpoints has one accepted spelling (RFC 4648 sectio
 ### 9.3 Logged before used
 
 The broker issues a session for a chain only when every link is **proven logged**: for each link, the broker holds a checkpoint that its trust policy accepts, the link's entry index, and an inclusion proof of the entry's leaf hash in that checkpoint's tree (RFC 9162 section 2.1.3), and the proof verifies.
+The proof travels as text: the line `remit-logged/v1`; then one line per link, in chain order, holding the entry index in decimal and the inclusion proof's hashes in base64, separated by single spaces; then a blank line; then the checkpoint as a signed note with its cosignatures.
+The trust policy is text too: `log <vkey>`, one `witness <vkey>` line per trusted witness, and `quorum <k>`, where each vkey is in the signed-note verifier key form; a quorum larger than the number of distinct witness keys is refused, since no checkpoint could meet it.
 
 It follows that every warrant ever honoured is in the log, where anyone who reads the log can see it.
 An issuer key used without its holder's knowledge leaves entries the holder can find, which is what threat model assumption 3 relies on.
@@ -390,6 +392,7 @@ The reconciler appends each result it signs.
 The log is served as tlog-tiles static files: `checkpoint`, `tile/<L>/<N>` and `tile/entries/<N>`, each with the paths and partial-tile rules of that specification.
 Results are served beside them at `result/<hex SHA-256>`.
 Tiles and results never change once written; only `checkpoint` does.
+Files whose names begin with a dot (the writer's lock, files being written) belong to the writer and are never served.
 
 ### 9.6 What the log does not claim
 

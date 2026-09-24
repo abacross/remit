@@ -1815,6 +1815,8 @@ dependencies = [
  "remit-aws",
  "remit-broker",
  "remit-core",
+ "remit-log",
+ "remit-logstore",
  "remit-reconcile",
  "serde_json",
  "tokio",

@@ -1,9 +1,10 @@
 //! `remit`: keys, warrants, delegation, and `remit run`.
 //!
-//! `remit run` verifies a warrant chain against trusted roots, obtains an STS session
-//! stamped with the leaf warrant's identifier (SPEC section 8.1), and runs a command with
-//! those credentials and no other: every other place an AWS SDK looks for credentials is
-//! closed in the child's environment, so it cannot fall back to the broker's own.
+//! `remit run` verifies a warrant chain against trusted roots and that every link is
+//! proven logged (SPEC section 9.3), obtains an STS session stamped with the leaf
+//! warrant's identifier (SPEC section 8.1), and runs a command with those credentials and
+//! no other: every other place an AWS SDK looks for credentials is closed in the child's
+//! environment, so it cannot fall back to the broker's own.
 
 #![forbid(unsafe_code)]
 
@@ -11,6 +12,8 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+mod log;
 
 use clap::{Args, Parser, Subcommand};
 use remit_core::{
@@ -41,6 +44,9 @@ enum Top {
     Run(RunArgs),
     /// Reconcile `CloudTrail` against warrants (SPEC 6); read-only AWS calls only.
     Reconcile(ReconcileArgs),
+    /// The witnessed log: create, append, cosign, prove and verify (SPEC 9).
+    #[command(subcommand)]
+    Log(log::LogCmd),
     /// Verify a signed reconciliation report offline.
     VerifyReport {
         /// The report.
@@ -180,6 +186,12 @@ struct RunArgs {
     /// The role's maximum session duration in seconds.
     #[arg(long, default_value_t = 3600)]
     role_max_seconds: u64,
+    /// The trust policy for the log (SPEC 9.2): no chain is honoured unless proven logged.
+    #[arg(long)]
+    log_policy: PathBuf,
+    /// The proof that every link of the chain is logged (`remit log prove`).
+    #[arg(long)]
+    log_proof: PathBuf,
     /// The region for STS and for the command; else the environment's, else us-east-1.
     #[arg(long)]
     region: Option<String>,
@@ -196,7 +208,7 @@ fn now() -> u64 {
         .map_or(0, |d| d.as_secs())
 }
 
-fn read_seed(path: &Path) -> Result<IssuerKey> {
+fn read_seed_bytes(path: &Path) -> Result<[u8; 32]> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let hex = text.trim();
     if hex.len() != 64 {
@@ -208,7 +220,11 @@ fn read_seed(path: &Path) -> Result<IssuerKey> {
         let pair = hex.get(at..at.saturating_add(2)).unwrap_or("");
         *byte = u8::from_str_radix(pair, 16).map_err(|_| format!("{}: not hex", path.display()))?;
     }
-    Ok(IssuerKey::from_seed(&seed))
+    Ok(seed)
+}
+
+fn read_seed(path: &Path) -> Result<IssuerKey> {
+    Ok(IssuerKey::from_seed(&read_seed_bytes(path)?))
 }
 
 fn write_new(path: &Path, bytes: &[u8]) -> Result<()> {
@@ -317,6 +333,9 @@ async fn run(args: RunArgs) -> Result<ExitCode> {
     let chain = read_chain(&args.chain)?;
     let plan = remit_broker::plan(&chain, &roots(&args.roots)?, now(), args.role_max_seconds)
         .map_err(|e| format!("refused: {e}"))?;
+    // Logged before used (SPEC 9.3): checked before anything reaches AWS.
+    let logged = log::verify_logged(&args.log_policy, &args.chain, &args.log_proof)
+        .map_err(|e| format!("refused: {e}"))?;
     // A machine with no configured region is common; STS still needs one, and the command
     // should run in the same one (found on the first live session, 2026-09-24).
     let chain_of_regions = aws_config::meta::region::RegionProviderChain::first_try(
@@ -336,8 +355,12 @@ async fn run(args: RunArgs) -> Result<ExitCode> {
         .await
         .map_err(|e| e.to_string())?;
     eprintln!(
-        "remit: warrant {} for {}, {} s",
-        plan.warrant_id, plan.subject, plan.duration_seconds
+        "remit: warrant {} for {}, {} s; logged in {} at size {}",
+        plan.warrant_id,
+        plan.subject,
+        plan.duration_seconds,
+        logged.checkpoint.origin(),
+        logged.checkpoint.size()
     );
 
     let (program, rest) = args.command.split_first().ok_or("no command")?;
@@ -546,17 +569,20 @@ fn field<'a>(v: &'a serde_json::Value, key: &str) -> &'a serde_json::Value {
     v.get(key).unwrap_or(&serde_json::Value::Null)
 }
 
-fn verify_report(report: &Path, signature: &Path, key_id: &str) -> Result<()> {
-    let bytes = std::fs::read(report).map_err(|e| format!("{}: {e}", report.display()))?;
+/// Reads a report's signature file (SPEC 6.6): the signer's key and the signature. The
+/// signature itself is checked by the caller.
+fn read_signature_file(signature: &Path) -> Result<(KeyId, [u8; 64])> {
     let sig_text =
         std::fs::read_to_string(signature).map_err(|e| format!("{}: {e}", signature.display()))?;
     let sig: serde_json::Value = serde_json::from_str(&sig_text).map_err(|e| e.to_string())?;
     if sig.get("domain").and_then(serde_json::Value::as_str) != Some("REMITRv1") {
         return Err("signature is not in the report domain".into());
     }
-    if sig.get("key").and_then(serde_json::Value::as_str) != Some(key_id) {
-        return Err(format!("signed by {:?}, not {key_id}", sig.get("key")));
-    }
+    let key = sig
+        .get("key")
+        .and_then(serde_json::Value::as_str)
+        .ok_or("no key")?;
+    let key = KeyId::parse(key).map_err(|e| e.to_string())?;
     let hex = sig
         .get("signature")
         .and_then(serde_json::Value::as_str)
@@ -570,7 +596,21 @@ fn verify_report(report: &Path, signature: &Path, key_id: &str) -> Result<()> {
         *byte = u8::from_str_radix(hex.get(at..at.saturating_add(2)).unwrap_or(""), 16)
             .map_err(|_| "signature is not hex")?;
     }
-    let key = KeyId::parse(key_id).map_err(|e| e.to_string())?;
+    Ok((key, raw))
+}
+
+/// The signature beside a report, at `<report>.sig`.
+fn read_report_signature(report: &Path) -> Result<(KeyId, [u8; 64])> {
+    read_signature_file(&PathBuf::from(format!("{}.sig", report.display())))
+}
+
+fn verify_report(report: &Path, signature: &Path, key_id: &str) -> Result<()> {
+    let bytes = std::fs::read(report).map_err(|e| format!("{}: {e}", report.display()))?;
+    let (signer, raw) = read_signature_file(signature)?;
+    if signer.as_str() != key_id {
+        return Err(format!("signed by {signer}, not {key_id}"));
+    }
+    let key = signer;
     remit_core::verify_in_domain(&key, REPORT_DOMAIN, &bytes, &raw).map_err(|_| {
         "the signature does not verify: the report was changed or not signed by this key".to_owned()
     })?;
@@ -655,6 +695,7 @@ async fn main() -> ExitCode {
         Top::Warrant(w) => warrant(w).map(|()| ExitCode::SUCCESS),
         Top::Run(r) => run(r).await,
         Top::Reconcile(r) => reconcile(r).await,
+        Top::Log(l) => log::command(l).map(|()| ExitCode::SUCCESS),
         Top::VerifyReport {
             report,
             signature,
