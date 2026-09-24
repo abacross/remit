@@ -1,0 +1,25 @@
+[package]
+name = "remit-cli"
+description = "The remit command: keys, warrants, delegation, and `remit run`, which gives a command AWS credentials scoped by a verified warrant and nothing else."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "remit"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+remit-core = { path = "../remit-core" }
+remit-broker = { path = "../remit-broker" }
+tokio = { version = "1.53.1", features = ["rt", "macros"] }
+getrandom = "0.4.3"
+clap = { version = "4.6.7", features = ["derive"] }
+aws-config = "1.12.0"
+aws-sdk-sts = "1.117.0"

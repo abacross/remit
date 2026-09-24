@@ -25,7 +25,8 @@ Early. The specification, the threat model, the warrant semantics, signatures an
 | `docs/SPEC.md`, `docs/THREAT-MODEL.md`, `docs/adr/` | Draft 0.1 |
 | `remit-core`: warrants, patterns, the authorization decision, attenuation, canonical identity | Implemented, property-tested |
 | Signed warrants, strict decoding, delegation chains | Implemented, property-tested (ADR 0003) |
-| AWS broker | Not started |
+| Session policy compiler (AWS) | Implemented, property-tested, checked against AWS's policy simulator |
+| AWS broker and `remit` command | Implemented; first live session pending the role |
 | Reconciler | Not started |
 | Witnessed log | Not started |
 
