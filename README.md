@@ -18,7 +18,7 @@ What Remit does not claim is part of the design, not a footnote: see `docs/SPEC.
 
 ## Status
 
-Early. The specification, the threat model, warrants, signatures and delegation chains, the AWS broker and the reconciler exist and have run against a real account. The witnessed log exists and the broker requires it; it has not yet been published anywhere but this machine.
+Early. The specification, the threat model, warrants, signatures and delegation chains, the AWS broker and the reconciler exist and have run against a real account. The witnessed log exists and the broker requires it; no public instance of the log is hosted yet.
 
 | Part | State |
 | --- | --- |
