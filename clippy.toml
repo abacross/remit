@@ -1,0 +1,5 @@
+# In tests a panic is how a test fails; in library code it is a defect (ADR 0002).
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-indexing-slicing-in-tests = true

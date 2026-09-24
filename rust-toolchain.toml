@@ -1,0 +1,5 @@
+# ADR 0002: an exact toolchain, moved only by a reviewed change that runs the full suite.
+[toolchain]
+channel = "1.98.1"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

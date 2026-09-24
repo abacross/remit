@@ -1,0 +1,25 @@
+[workspace]
+resolver = "3"
+members = ["crates/remit-core"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "Apache-2.0"
+repository = "https://github.com/abacross/remit"
+authors = ["Abacross LLC"]
+
+# ADR 0002: no unsafe anywhere, pedantic clippy, warnings fail CI (scripts/ci.sh).
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+unreachable_pub = "warn"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+indexing_slicing = "warn"
+arithmetic_side_effects = "warn"
