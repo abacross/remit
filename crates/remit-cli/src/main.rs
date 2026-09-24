@@ -39,6 +39,52 @@ enum Top {
     Warrant(WarrantCmd),
     /// Run a command with AWS credentials scoped by a verified warrant chain.
     Run(RunArgs),
+    /// Reconcile `CloudTrail` against warrants (SPEC 6); read-only AWS calls only.
+    Reconcile(ReconcileArgs),
+    /// Verify a signed reconciliation report offline.
+    VerifyReport {
+        /// The report.
+        #[arg(long)]
+        report: PathBuf,
+        /// Its signature file.
+        #[arg(long)]
+        signature: PathBuf,
+        /// The reconciler key the report must be signed by.
+        #[arg(long)]
+        key_id: String,
+    },
+}
+
+#[derive(Args)]
+struct ReconcileArgs {
+    /// A directory of warrant chains (`*.chain`) to join events to.
+    #[arg(long)]
+    chains: PathBuf,
+    /// Trusted root key identifiers.
+    #[arg(long = "root", required = true)]
+    roots: Vec<String>,
+    /// A managed role ARN; repeat for more.
+    #[arg(long = "role", required = true)]
+    roles: Vec<String>,
+    /// A region to gather events from; repeat. The report speaks for these only.
+    #[arg(long = "region", required = true)]
+    regions: Vec<String>,
+    /// Start of the window, `YYYY-MM-DDTHH:MM:SSZ`.
+    #[arg(long)]
+    from: String,
+    /// End of the window.
+    #[arg(long)]
+    to: String,
+    /// Seconds after the window's end before events are taken as delivered. The first live
+    /// session's refused call took between 25 and 85 minutes to appear (conformance/RESULTS.md).
+    #[arg(long, default_value_t = 7200)]
+    settle_seconds: u64,
+    /// The reconciler's seed file, which signs the report.
+    #[arg(long)]
+    key: PathBuf,
+    /// Where to write the report; the signature goes beside it as `<out>.sig`.
+    #[arg(long)]
+    out: PathBuf,
 }
 
 #[derive(Subcommand)]
@@ -316,6 +362,229 @@ async fn run(args: RunArgs) -> Result<ExitCode> {
         .map_or(ExitCode::FAILURE, ExitCode::from))
 }
 
+/// The domain report signatures are made in (`remit_core::sign_in_domain`).
+const REPORT_DOMAIN: &[u8; 8] = b"REMITRv1";
+
+/// IAM returns trust policies percent-encoded (RFC 3986).
+fn percent_decode(s: &str) -> Result<String> {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0usize;
+    while let Some(&b) = bytes.get(i) {
+        if b == b'%' {
+            let hex = s
+                .get(i.saturating_add(1)..i.saturating_add(3))
+                .ok_or("truncated %-escape")?;
+            out.push(u8::from_str_radix(hex, 16).map_err(|_| format!("bad %-escape {hex:?}"))?);
+            i = i.saturating_add(3);
+        } else {
+            out.push(if b == b'+' { b' ' } else { b });
+            i = i.saturating_add(1);
+        }
+    }
+    String::from_utf8(out).map_err(|_| "decoded policy is not UTF-8".to_owned())
+}
+
+async fn fetch_events(
+    config: &aws_config::SdkConfig,
+    region: &str,
+    from: u64,
+    to: u64,
+) -> Result<Vec<remit_reconcile::Event>> {
+    let regional = config
+        .to_builder()
+        .region(aws_config::Region::new(region.to_owned()))
+        .build();
+    let client = aws_sdk_cloudtrail::Client::new(&regional);
+    let (start, end) = (
+        aws_sdk_cloudtrail::primitives::DateTime::from_secs(i64::try_from(from).unwrap_or(0)),
+        aws_sdk_cloudtrail::primitives::DateTime::from_secs(i64::try_from(to).unwrap_or(i64::MAX)),
+    );
+    let mut events = Vec::new();
+    let mut token: Option<String> = None;
+    loop {
+        let page = client
+            .lookup_events()
+            .start_time(start)
+            .end_time(end)
+            .max_results(50)
+            .set_next_token(token.clone())
+            .send()
+            .await
+            .map_err(|e| {
+                format!(
+                    "{region}: {}",
+                    aws_sdk_cloudtrail::error::DisplayErrorContext(&e)
+                )
+            })?;
+        for e in page.events() {
+            let raw = e
+                .cloud_trail_event()
+                .ok_or_else(|| format!("{region}: an event without its record"))?;
+            let v: serde_json::Value =
+                serde_json::from_str(raw).map_err(|err| format!("{region}: {err}"))?;
+            events.push(
+                remit_reconcile::Event::from_json(&v).map_err(|err| format!("{region}: {err}"))?,
+            );
+        }
+        token = page.next_token().map(str::to_owned);
+        if token.is_none() {
+            break;
+        }
+        // LookupEvents allows two requests a second per region.
+        tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+    }
+    Ok(events)
+}
+
+async fn reconcile(args: ReconcileArgs) -> Result<ExitCode> {
+    let from = remit_aws_parse(&args.from)?;
+    let to = remit_aws_parse(&args.to)?;
+    if from >= to {
+        return Err("--from must be before --to".into());
+    }
+    let signer = read_seed(&args.key)?;
+    let trusted = roots(&args.roots)?;
+
+    let mut warrants = Vec::new();
+    let mut refused = Vec::new();
+    let mut entries: Vec<PathBuf> = std::fs::read_dir(&args.chains)
+        .map_err(|e| format!("{}: {e}", args.chains.display()))?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|x| x == "chain"))
+        .collect();
+    entries.sort();
+    for path in entries {
+        match read_chain(&path).and_then(|links| {
+            verify_chain(&links, &trusted)
+                .cloned()
+                .map_err(|e| e.to_string())
+        }) {
+            Ok(w) => warrants.push(w),
+            Err(e) => refused.push(format!("{}: {e}", path.display())),
+        }
+    }
+
+    let config = aws_config::defaults(aws_config::BehaviorVersion::latest())
+        .region(aws_config::Region::from_static("us-east-1"))
+        .load()
+        .await;
+    let iam = aws_sdk_iam::Client::new(&config);
+    let mut roles = Vec::new();
+    for arn in &args.roles {
+        let name = arn.rsplit('/').next().unwrap_or(arn);
+        let got = iam
+            .get_role()
+            .role_name(name)
+            .send()
+            .await
+            .map_err(|e| format!("{arn}: {}", aws_sdk_iam::error::DisplayErrorContext(&e)))?;
+        let encoded = got
+            .role()
+            .and_then(|r| r.assume_role_policy_document())
+            .ok_or_else(|| format!("{arn}: no trust policy"))?;
+        let doc: serde_json::Value =
+            serde_json::from_str(&percent_decode(encoded)?).map_err(|e| format!("{arn}: {e}"))?;
+        roles.push(remit_reconcile::ManagedRole {
+            arn: arn.clone(),
+            trust_problems: remit_reconcile::trust_policy_problems(&doc),
+        });
+    }
+
+    let mut events = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    for region in &args.regions {
+        for e in fetch_events(&config, region, from, to).await? {
+            if seen.insert(e.id.clone()) {
+                events.push(e);
+            }
+        }
+    }
+
+    let mut report = remit_reconcile::reconcile(&remit_reconcile::Input {
+        warrants: &warrants,
+        roles: &roles,
+        events: &events,
+        from,
+        to,
+        now: now(),
+        settle_seconds: args.settle_seconds,
+        source: remit_reconcile::EventSource::EventHistory,
+        regions: &args.regions,
+    });
+    report.refused_inputs = refused;
+    let json = report.to_json().map_err(|e| e.to_string())?;
+    let signature = remit_core::sign_in_domain(&signer, REPORT_DOMAIN, json.as_bytes())
+        .map_err(|e| e.to_string())?;
+    let hex = signature
+        .iter()
+        .fold(String::with_capacity(128), |mut s, b| {
+            let _ = write!(s, "{b:02x}");
+            s
+        });
+    write_new(&args.out, json.as_bytes())?;
+    let sig_path = PathBuf::from(format!("{}.sig", args.out.display()));
+    let sig =
+        serde_json::json!({"domain": "REMITRv1", "key": signer.id().as_str(), "signature": hex});
+    write_new(&sig_path, format!("{sig}\n").as_bytes())?;
+    println!("{json}");
+    eprintln!("remit: signed by {}; {}", signer.id(), sig_path.display());
+    Ok(
+        if matches!(report.verdict, remit_reconcile::Verdict::Incomplete) {
+            ExitCode::from(2)
+        } else {
+            ExitCode::SUCCESS
+        },
+    )
+}
+
+fn remit_aws_parse(text: &str) -> Result<u64> {
+    remit_aws::parse_iso8601(text).ok_or_else(|| format!("{text:?} is not YYYY-MM-DDTHH:MM:SSZ"))
+}
+
+fn field<'a>(v: &'a serde_json::Value, key: &str) -> &'a serde_json::Value {
+    v.get(key).unwrap_or(&serde_json::Value::Null)
+}
+
+fn verify_report(report: &Path, signature: &Path, key_id: &str) -> Result<()> {
+    let bytes = std::fs::read(report).map_err(|e| format!("{}: {e}", report.display()))?;
+    let sig_text =
+        std::fs::read_to_string(signature).map_err(|e| format!("{}: {e}", signature.display()))?;
+    let sig: serde_json::Value = serde_json::from_str(&sig_text).map_err(|e| e.to_string())?;
+    if sig.get("domain").and_then(serde_json::Value::as_str) != Some("REMITRv1") {
+        return Err("signature is not in the report domain".into());
+    }
+    if sig.get("key").and_then(serde_json::Value::as_str) != Some(key_id) {
+        return Err(format!("signed by {:?}, not {key_id}", sig.get("key")));
+    }
+    let hex = sig
+        .get("signature")
+        .and_then(serde_json::Value::as_str)
+        .ok_or("no signature")?;
+    let mut raw = [0u8; 64];
+    if hex.len() != 128 {
+        return Err("signature is not 64 bytes".into());
+    }
+    for (i, byte) in raw.iter_mut().enumerate() {
+        let at = i.saturating_mul(2);
+        *byte = u8::from_str_radix(hex.get(at..at.saturating_add(2)).unwrap_or(""), 16)
+            .map_err(|_| "signature is not hex")?;
+    }
+    let key = KeyId::parse(key_id).map_err(|e| e.to_string())?;
+    remit_core::verify_in_domain(&key, REPORT_DOMAIN, &bytes, &raw).map_err(|_| {
+        "the signature does not verify: the report was changed or not signed by this key".to_owned()
+    })?;
+    let parsed: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+    println!(
+        "valid: verdict {}, window {} .. {}, regions {}",
+        field(&parsed, "verdict"),
+        field(&parsed, "from"),
+        field(&parsed, "to"),
+        field(&parsed, "regions")
+    );
+    Ok(())
+}
+
 fn key(cmd: KeyCmd) -> Result<()> {
     match cmd {
         KeyCmd::New { out } => {
@@ -385,6 +654,12 @@ async fn main() -> ExitCode {
         Top::Key(k) => key(k).map(|()| ExitCode::SUCCESS),
         Top::Warrant(w) => warrant(w).map(|()| ExitCode::SUCCESS),
         Top::Run(r) => run(r).await,
+        Top::Reconcile(r) => reconcile(r).await,
+        Top::VerifyReport {
+            report,
+            signature,
+            key_id,
+        } => verify_report(&report, &signature, &key_id).map(|()| ExitCode::SUCCESS),
     };
     match outcome {
         Ok(code) => code,

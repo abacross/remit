@@ -12,7 +12,7 @@
 use proptest::prelude::*;
 use remit_core::{
     ChainError, IssuerKey, KeyId, SignatureError, SignedWarrant, Warrant, WarrantSpec,
-    decode_chain, encode_chain, verify_chain,
+    decode_chain, encode_chain, sign_in_domain, verify_chain, verify_in_domain,
 };
 
 fn key(n: u8) -> IssuerKey {
@@ -321,4 +321,17 @@ proptest! {
         prefixed.extend_from_slice(&bytes);
         let _ = decode_chain(&prefixed);
     }
+}
+
+#[test]
+fn domain_signatures_do_not_cross_domains_or_impersonate_warrants() {
+    let k = key(5);
+    let sig = sign_in_domain(&k, b"REMITRv1", b"report").unwrap();
+    assert!(verify_in_domain(k.id(), b"REMITRv1", b"report", &sig).is_ok());
+    assert!(verify_in_domain(k.id(), b"REMITXv1", b"report", &sig).is_err());
+    assert!(verify_in_domain(k.id(), b"REMITRv1", b"reporT", &sig).is_err());
+    assert!(verify_in_domain(key(6).id(), b"REMITRv1", b"report", &sig).is_err());
+    // The warrant domain is reserved for warrants.
+    assert!(sign_in_domain(&k, b"REMITWv1", b"x").is_err());
+    assert!(verify_in_domain(k.id(), b"REMITWv1", b"x", &sig).is_err());
 }

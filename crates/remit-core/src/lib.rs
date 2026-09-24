@@ -40,6 +40,6 @@ pub use decode::DecodeError;
 pub use pattern::{ActionPattern, PatternError, ResourcePattern};
 pub use signed::{
     ChainError, IssuerKey, KeyId, SignatureError, SignedWarrant, decode_chain, encode_chain,
-    verify_chain,
+    sign_in_domain, verify_chain, verify_in_domain,
 };
 pub use warrant::{Grant, Identifier, Request, Warrant, WarrantError, WarrantId, WarrantSpec};

@@ -71,6 +71,7 @@ fn run(events: &[Event], trust: &Value, now_offset: u64) -> Report {
         now: w.not_after() + now_offset,
         settle_seconds: 900,
         source: EventSource::EventHistory,
+        regions: &["us-east-1".to_owned(), "us-west-2".to_owned()],
     })
 }
 

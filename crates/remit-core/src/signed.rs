@@ -338,3 +338,44 @@ fn split_u32(bytes: &[u8]) -> Result<(usize, &[u8]), SignatureError> {
         tail,
     ))
 }
+
+/// Signs `message` under an 8-byte domain other than a warrant's (`REMITWv1`), so a
+/// signature made for one kind of document can never be presented as another. The
+/// signature covers the domain followed by the message.
+///
+/// # Errors
+///
+/// The warrant domain, which only [`IssuerKey::sign`] may use.
+pub fn sign_in_domain(
+    key: &IssuerKey,
+    domain: &[u8; 8],
+    message: &[u8],
+) -> Result<[u8; SIGNATURE_LEN], SignatureError> {
+    if domain == crate::encoding::MAGIC {
+        return Err(SignatureError::BadSignature);
+    }
+    let mut bytes = domain.to_vec();
+    bytes.extend_from_slice(message);
+    Ok(key.signing.sign(&bytes).to_bytes())
+}
+
+/// Verifies a signature made by [`sign_in_domain`], strictly.
+///
+/// # Errors
+///
+/// The warrant domain, or a signature that does not verify under `key` for this domain.
+pub fn verify_in_domain(
+    key: &KeyId,
+    domain: &[u8; 8],
+    message: &[u8],
+    signature: &[u8; SIGNATURE_LEN],
+) -> Result<(), SignatureError> {
+    if domain == crate::encoding::MAGIC {
+        return Err(SignatureError::BadSignature);
+    }
+    let mut bytes = domain.to_vec();
+    bytes.extend_from_slice(message);
+    key.key
+        .verify_strict(&bytes, &Signature::from_bytes(signature))
+        .map_err(|_| SignatureError::BadSignature)
+}

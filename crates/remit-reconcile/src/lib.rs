@@ -58,6 +58,8 @@ pub struct Input<'a> {
     pub settle_seconds: u64,
     /// Where the events came from.
     pub source: EventSource,
+    /// The regions the events were gathered from; the verdict speaks for these only.
+    pub regions: &'a [String],
 }
 
 /// What kind of finding (SPEC sections 6.2 and 6.3).
@@ -124,6 +126,11 @@ pub struct Report {
     pub run_at: String,
     /// Where the events came from.
     pub source: EventSource,
+    /// The regions covered; the verdict speaks for these only (SPEC 6.1).
+    pub regions: Vec<String>,
+    /// Inputs refused before reconciliation, such as a chain that did not verify; filled by
+    /// the caller, which is where they are refused.
+    pub refused_inputs: Vec<String>,
     /// The managed roles and whether each trust policy held.
     pub roles: BTreeMap<String, bool>,
     /// The verdict.
@@ -224,6 +231,8 @@ pub fn reconcile(input: &Input<'_>) -> Report {
         to: remit_aws::iso8601(input.to),
         run_at: remit_aws::iso8601(input.now),
         source: input.source,
+        regions: input.regions.to_vec(),
+        refused_inputs: Vec::new(),
         roles: input
             .roles
             .iter()

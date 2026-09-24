@@ -165,6 +165,57 @@ dependencies = [
 ]
 
 [[package]]
+name = "aws-sdk-cloudtrail"
+version = "1.123.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b5a9b9f226c20702491d2698fde17dc281eb86de322d87f63fc31ac470acf15f"
+dependencies = [
+ "arc-swap",
+ "aws-credential-types",
+ "aws-runtime",
+ "aws-smithy-async",
+ "aws-smithy-http",
+ "aws-smithy-json",
+ "aws-smithy-observability",
+ "aws-smithy-runtime",
+ "aws-smithy-runtime-api",
+ "aws-smithy-schema",
+ "aws-smithy-types",
+ "aws-types",
+ "bytes",
+ "fastrand",
+ "http 1.5.0",
+ "regex-lite",
+ "tracing",
+]
+
+[[package]]
+name = "aws-sdk-iam"
+version = "1.126.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "af3a7f78c02c8708386a078c62002733e09c9d3510a3788f614c340c5c13b949"
+dependencies = [
+ "arc-swap",
+ "aws-credential-types",
+ "aws-runtime",
+ "aws-smithy-async",
+ "aws-smithy-http",
+ "aws-smithy-json",
+ "aws-smithy-observability",
+ "aws-smithy-query",
+ "aws-smithy-runtime",
+ "aws-smithy-runtime-api",
+ "aws-smithy-schema",
+ "aws-smithy-types",
+ "aws-smithy-xml",
+ "aws-types",
+ "fastrand",
+ "http 1.5.0",
+ "regex-lite",
+ "tracing",
+]
+
+[[package]]
 name = "aws-sdk-sso"
 version = "1.112.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1756,11 +1807,16 @@ name = "remit-cli"
 version = "0.1.0"
 dependencies = [
  "aws-config",
+ "aws-sdk-cloudtrail",
+ "aws-sdk-iam",
  "aws-sdk-sts",
  "clap",
  "getrandom 0.4.3",
+ "remit-aws",
  "remit-broker",
  "remit-core",
+ "remit-reconcile",
+ "serde_json",
  "tokio",
 ]
 

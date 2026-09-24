@@ -31,3 +31,12 @@ The first session through `remit run`, on role `remit-agent-readonly` (deploy/aw
 - CloudTrail event history (us-east-1) recorded `GetBucketLocation` with `userIdentity.sessionContext.sourceIdentity` equal to the warrant identifier, and the three `AssumeRole` events with the same `sourceIdentity`, within about a minute of the calls.
 - The refused `GetBucketVersioning` **was** recorded, with `errorCode` `AccessDenied` and the same `sourceIdentity`, but in **us-west-2**, the bucket's region, not in us-east-1 where the successful call was logged, and later: it was not in event history about 25 minutes after the call, and was by about 85 minutes. Two consequences, now in SPEC 6.1: a run must cover every region the account uses, or say which it covered; and the settling period must allow for a delay longer than the few minutes the successful call took.
 - The reconciler's first run over these events found that the session outlived its warrant by one second (planned from this machine's clock, logged a second later by AWS's); the broker now keeps a 60-second margin.
+
+## First reconciliation, 2026-09-24
+
+`remit reconcile` over 19:30Z to 21:03:08Z, us-east-1 and us-west-2, event history: 384 events.
+
+- **Verdict: incomplete**, correctly. The three sessions of the first live runs were each found to outlive their warrant by about a second, the defect the broker's 60-second margin now prevents; each is a session mismatch.
+- The refused `GetBucketVersioning` was a refused attempt (found in us-west-2); `GetCallerIdentity` was undetermined (its event names no resource); the trust policy held; 3 sessions and 3 managed actions joined to the one warrant.
+- Unmanaged activity was counted by principal: 62 events by the account's administrator user, which is the credential this machine's agent still runs on, and the rest by AWS services and service roles. That is the coverage limit of dogfooding on this machine, measured rather than asserted.
+- The report was signed by a reconciler key in the `REMITRv1` domain; `remit verify-report` accepted it, rejected a copy whose verdict was edited to "complete", and rejected a check against another key.
