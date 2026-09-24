@@ -148,8 +148,50 @@ A check that ever answers "contained" wrongly is a defect that breaks the theore
 
 ## 5. Signatures and chains
 
-**Open.** The signature scheme (Ed25519 over the canonical encoding is the working assumption), key identifiers, and whether chains are carried as a bundle or resolved from the log.
-The decision is ADR 0003.
+Decided in ADR 0003.
+
+### 5.1 Keys and identifiers
+
+A signing key is an Ed25519 key (RFC 8032).
+Its identifier is the text `ed25519:` followed by the 32-byte public key in RFC 4648 base32, lowercase, without padding: 60 characters in all.
+Every `issuer` is such an identifier.
+Every `subject` that may delegate must be one too, because rule 4 of section 4 requires a child's issuer to be its parent's subject; a subject that is not a key identifier can hold a warrant but never delegate from it.
+
+### 5.2 Signed warrants
+
+A signed warrant is the canonical encoding of a warrant (section 3.6) together with a 64-byte Ed25519 signature over exactly those bytes by the key its `issuer` names.
+The encoding begins with `REMITWv1`, which separates these signatures from any other use of the same key.
+
+A signed warrant is valid when:
+
+1. its bytes decode as a warrant (section 5.4);
+2. its `issuer` is a key identifier;
+3. the signature verifies under that key with strict verification: small-order public keys and non-canonical signature encodings are rejected.
+
+### 5.3 Chains
+
+A chain is a list of signed warrants `W0, W1, ..., Wn`.
+It is valid for a set of trusted root keys when:
+
+1. every `Wi` is a valid signed warrant (section 5.2);
+2. `W0` has no `parent`, and its issuer is one of the trusted roots;
+3. for every `i >= 1`, `Wi` is a valid attenuation of `W(i-1)` (section 4), which includes naming it as `parent` and being issued by its subject.
+
+The authority a valid chain confers is exactly that of its last warrant, `Wn`.
+By the attenuation theorem applied at every link, nothing `Wn` permits is outside what `W0` permits, other than in subject.
+
+A chain is refused as a whole on the first rule it breaks; a verifier never uses a prefix of an invalid chain.
+
+### 5.4 Decoding
+
+A decoder accepts exactly the byte strings that section 3.6 produces for some valid warrant, and nothing else.
+In particular it rejects trailing bytes, a wrong magic or version, a length that runs past the end, invalid UTF-8, a `parent` flag other than 0 or 1, and any content that section 3 forbids.
+For every byte string a decoder accepts, encoding the result gives back the same bytes.
+
+### 5.5 Transport
+
+A signed warrant travels as its canonical encoding followed immediately by its 64 signature bytes.
+The encoding is self-delimiting, so the signature is the last 64 bytes and everything before them must decode by section 5.4.
 
 ## 6. Completeness
 

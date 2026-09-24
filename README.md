@@ -18,13 +18,13 @@ What Remit does not claim is part of the design, not a footnote: see `docs/SPEC.
 
 ## Status
 
-Early. The specification, the threat model and the core warrant semantics exist; the broker, the reconciler and the log do not yet.
+Early. The specification, the threat model, the warrant semantics, signatures and delegation chains exist; the broker, the reconciler and the log do not yet.
 
 | Part | State |
 | --- | --- |
 | `docs/SPEC.md`, `docs/THREAT-MODEL.md`, `docs/adr/` | Draft 0.1 |
 | `remit-core`: warrants, patterns, the authorization decision, attenuation, canonical identity | Implemented, property-tested |
-| Signatures and delegation chains | ADR 0003, proposed |
+| Signed warrants, strict decoding, delegation chains | Implemented, property-tested (ADR 0003) |
 | AWS broker | Not started |
 | Reconciler | Not started |
 | Witnessed log | Not started |
