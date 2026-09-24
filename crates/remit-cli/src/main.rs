@@ -134,6 +134,9 @@ struct RunArgs {
     /// The role's maximum session duration in seconds.
     #[arg(long, default_value_t = 3600)]
     role_max_seconds: u64,
+    /// The region for STS and for the command; else the environment's, else us-east-1.
+    #[arg(long)]
+    region: Option<String>,
     /// The command and its arguments.
     #[arg(last = true, required = true)]
     command: Vec<String>,
@@ -268,7 +271,17 @@ async fn run(args: RunArgs) -> Result<ExitCode> {
     let chain = read_chain(&args.chain)?;
     let plan = remit_broker::plan(&chain, &roots(&args.roots)?, now(), args.role_max_seconds)
         .map_err(|e| format!("refused: {e}"))?;
-    let config = aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;
+    // A machine with no configured region is common; STS still needs one, and the command
+    // should run in the same one (found on the first live session, 2026-09-24).
+    let chain_of_regions = aws_config::meta::region::RegionProviderChain::first_try(
+        args.region.clone().map(aws_config::Region::new),
+    )
+    .or_default_provider()
+    .or_else(aws_config::Region::from_static("us-east-1"));
+    let config = aws_config::defaults(aws_config::BehaviorVersion::latest())
+        .region(chain_of_regions)
+        .load()
+        .await;
     let region = config
         .region()
         .map_or_else(|| "us-east-1".to_owned(), ToString::to_string);
