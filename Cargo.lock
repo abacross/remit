@@ -1830,6 +1830,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "remit-log"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "serde_json",
+ "sha2 0.11.0",
+]
+
+[[package]]
 name = "remit-reconcile"
 version = "0.1.0"
 dependencies = [

@@ -1,0 +1,19 @@
+[package]
+name = "remit-log"
+description = "The Remit witnessed log: an RFC 6962 Merkle tree with inclusion and consistency proofs, checkpoints as C2SP signed notes, and witness cosignatures (SPEC section 9). Pure, no I/O."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+sha2 = "0.11.0"
+
+[dev-dependencies]
+proptest = "1.11.0"
+serde_json = "1.0.151"
