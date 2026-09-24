@@ -225,7 +225,7 @@ A reconciliation run takes:
 
 1. the warrant chains it may join to, each verified against the trusted roots (section 5.3); a chain that does not verify is not a warrant for this run and is reported;
 2. the managed roles: the role ARNs the broker assumes, and each role's trust policy as observed at the time of the run;
-3. the provider's events for a window `[from, to]`, and a statement of where they came from and what evidence of their integrity exists;
+3. the provider's events for a window `[from, to]`, from **every region** the account uses, and a statement of where they came from and what evidence of their integrity exists. CloudTrail files an event under the region that served it, not the caller's: in the first live session, a refused S3 call on a bucket in us-west-2 was recorded there, while the session's other calls were recorded in us-east-1 (conformance/RESULTS.md). A run that covered fewer regions names the ones it covered, and its verdict speaks for those regions only;
 4. the time of the run.
 
 ### 6.2 Classifying events
