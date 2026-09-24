@@ -103,6 +103,36 @@ pub fn base32_lower(data: &[u8]) -> String {
     out
 }
 
+/// Decodes lowercase unpadded RFC 4648 base32, strictly: any other character, an
+/// impossible length, or non-zero unused bits in the last character is refused, so every
+/// byte string has exactly one accepted spelling.
+#[must_use]
+pub fn base32_lower_decode(text: &str) -> Option<Vec<u8>> {
+    let mut out = Vec::with_capacity(text.len().saturating_mul(5) / 8);
+    let mut buffer: u32 = 0;
+    let mut bits: u32 = 0;
+    for c in text.bytes() {
+        let value = match c {
+            b'a'..=b'z' => c.wrapping_sub(b'a'),
+            b'2'..=b'7' => c.wrapping_sub(b'2').wrapping_add(26),
+            _ => return None,
+        };
+        buffer = (buffer << 5) | u32::from(value);
+        bits = bits.saturating_add(5);
+        if bits >= 8 {
+            bits = bits.saturating_sub(8);
+            out.push(u8::try_from((buffer >> bits) & 0xff).ok()?);
+            buffer &= (1u32 << bits).saturating_sub(1);
+        }
+    }
+    // Five or more leftover bits mean a character that encodes no byte; any leftover bit
+    // that is set means a second spelling of the same bytes.
+    if bits >= 5 || buffer != 0 {
+        return None;
+    }
+    Some(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -122,5 +152,17 @@ mod tests {
         for (input, expected) in vectors {
             assert_eq!(base32_lower(input.as_bytes()), expected, "{input:?}");
         }
+        for (input, expected) in vectors {
+            assert_eq!(
+                base32_lower_decode(expected).as_deref(),
+                Some(input.as_bytes()),
+                "{expected:?}"
+            );
+        }
+        // One spelling only: set unused bits, impossible lengths and other characters fail.
+        assert_eq!(base32_lower_decode("mz"), None); // "f" is "my"; "mz" sets an unused bit
+        assert_eq!(base32_lower_decode("m"), None);
+        assert_eq!(base32_lower_decode("MY"), None);
+        assert_eq!(base32_lower_decode("m1"), None);
     }
 }

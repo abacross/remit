@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc c14a24a68cf4a2a383c156343d0612c900613b044a6253fb2b257e4ec2396fde # shrinks to w = Warrant { issuer: Identifier("key:issuer"), subject: Identifier("agent:subject"), purpose: "", not_before: 0, not_after: 1, grants: [Grant { actions: [ActionPattern("a")], resources: [ResourcePattern("a")] }], parent: None, max_depth: 0 }, at = Index(0), value = 0, cut = Index(0)
