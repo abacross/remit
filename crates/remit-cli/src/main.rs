@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+mod approve;
 mod log;
 
 use clap::{Args, Parser, Subcommand};
@@ -44,6 +45,8 @@ enum Top {
     Run(RunArgs),
     /// Reconcile `CloudTrail` against warrants (SPEC 6); read-only AWS calls only.
     Reconcile(ReconcileArgs),
+    /// Ask an approver for one action, inside a bound a human signed (SPEC 10).
+    Approve(approve::ApproveArgs),
     /// The witnessed log: create, append, cosign, prove and verify (SPEC 9).
     #[command(subcommand)]
     Log(log::LogCmd),
@@ -697,6 +700,7 @@ async fn main() -> ExitCode {
         Top::Run(r) => run(r).await,
         Top::Reconcile(r) => reconcile(r).await,
         Top::Log(l) => log::command(l).map(|()| ExitCode::SUCCESS),
+        Top::Approve(a) => approve::command(&a),
         Top::VerifyReport {
             report,
             signature,

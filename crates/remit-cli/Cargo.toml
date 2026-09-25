@@ -18,6 +18,7 @@ workspace = true
 [dependencies]
 remit-core = { path = "../remit-core" }
 remit-broker = { path = "../remit-broker" }
+remit-approver = { path = "../remit-approver" }
 remit-log = { path = "../remit-log" }
 remit-logstore = { path = "../remit-logstore" }
 tokio = { version = "1.53.1", features = ["rt", "macros", "time"] }
@@ -30,3 +31,4 @@ aws-sdk-iam = "1.126.0"
 remit-reconcile = { version = "0.1.0", path = "../remit-reconcile" }
 serde_json = "1.0.151"
 remit-aws = { version = "0.1.0", path = "../remit-aws" }
+ureq = "3.4.2"
