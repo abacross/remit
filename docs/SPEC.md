@@ -399,3 +399,42 @@ Files whose names begin with a dot (the writer's lock, files being written) belo
 - It does not stop a thief with an issuer key from logging and using a warrant. It makes that warrant public, and the reconciler reports every event under it.
 - It does not choose witnesses for the verifier. A verifier that trusts witnesses the log's operator controls has no split-view defence.
 - It is on the broker's path: when inclusion cannot be proven, no session is issued. Remit fails closed, so the log's availability is part of Remit's.
+
+## 10. Approvers
+
+Decided in ADR 0008.
+An approver is an agent that decides, per request, whether another agent may take one action without a person, and records the decision as a warrant.
+Its judgement may come from rules or from a model; this section fixes what any approver must do regardless of how it judges, so that no judgement can grant more than a human already bounded.
+
+### 10.1 The bound
+
+A human issues the approver a warrant `B` whose subject is the approver's key and whose `max_depth` is at least 1.
+Everything the approver issues is a child of `B` (section 4), so by the attenuation theorem it permits nothing `B` does not.
+
+### 10.2 A request
+
+A request names the agent (the child's subject), one action, one resource, a duration, the agent's purpose, and optional context.
+Action and resource are concrete names, not patterns: they contain no `*` or `?`.
+The context is untrusted: it is shown to the decider and never parsed for instructions by the approver.
+
+### 10.3 The decision, in order
+
+1. **Form.** A request that is not well formed, or whose action or resource is a pattern, is refused.
+2. **Bound.** The child is built (10.4) and checked as an attenuation of `B`; if it is not one, the request is refused. No decider is asked.
+3. **Rules.** A request whose action matches one of the approver's hard-rule action patterns (section 3.3) is escalated. No decider is asked.
+4. **Decider.** The decider returns a risk band, one of `read_only`, `reversible_change`, `sensitive_or_external` and `destructive`, and a probability that the action is safe to take without a person. An error, a timeout or an answer outside these forms escalates.
+5. **Threshold.** The child is issued only when the band is one the approver's configuration allows and the probability is at or above its threshold; otherwise the request is escalated.
+
+**Refused** means the request can never be approved under `B`; **escalated** means a person must decide.
+Every decision, whatever its outcome, is recorded by the approver with the input hash of 10.5.
+
+### 10.4 The child
+
+The child's issuer is the approver's key and its subject the requesting agent; it has one grant, the requested action on the requested resource; its window starts at the time of the decision (or `B`'s `not_before`, if later) and ends after the requested duration (or at `B`'s `not_after`, if sooner); its `max_depth` is 0; its parent is `B`.
+Its purpose is the evidence line of 10.5, followed by ` | ` and the agent's purpose, cut at a character boundary to fit 512 bytes.
+
+### 10.5 Evidence
+
+The evidence line is `remit-approval/v1` followed by space-separated `key=value` fields: `decider` (the decider's name), `model` (the model the decider reports), `band`, `p` (the probability, four decimals), `threshold`, and `input`.
+`input` is `sha256:` and the first 16 bytes, in lowercase hex, of the SHA-256 of the state shown to the decider: a JSON object with the keys `action`, `context`, `purpose` and `resource`, in that order, without whitespace.
+Because the approver signs the child and the child is logged before use (section 9.3), the evidence is public and cannot be altered after the fact.
