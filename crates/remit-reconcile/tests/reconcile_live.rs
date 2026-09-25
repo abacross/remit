@@ -72,6 +72,7 @@ fn run(events: &[Event], trust: &Value, now_offset: u64) -> Report {
         settle_seconds: 900,
         source: EventSource::EventHistory,
         regions: &["us-east-1".to_owned(), "us-west-2".to_owned()],
+        record_problems: &[],
     })
 }
 
@@ -230,4 +231,41 @@ fn a_trust_policy_that_admits_sessions_without_a_warrant_fails_the_run() {
         assert!(kinds(&r).contains(&Kind::TrustPolicy), "{name}");
         assert_eq!(r.verdict, Verdict::Incomplete, "{name}");
     }
+}
+
+#[test]
+fn only_a_validated_record_without_problems_is_complete() {
+    static GAP: std::sync::LazyLock<[String; 1]> =
+        std::sync::LazyLock::new(|| ["us-east-1: no digest covers 11:01 to 12:01".to_owned()]);
+    let w = warrant();
+    let roles = [ManagedRole {
+        arn: ROLE.to_owned(),
+        trust_problems: trust_policy_problems(&fixture("trust-policy.json")),
+    }];
+    let warrants = [w.clone()];
+    let evs = events(|_| {});
+    let regions = ["us-east-1".to_owned()];
+    let input = |source, problems: &'static [String]| Input {
+        warrants: &warrants,
+        roles: &roles,
+        events: &evs,
+        from: w.not_before(),
+        to: w.not_after(),
+        now: w.not_after() + 7200,
+        settle_seconds: 900,
+        source,
+        regions: &regions,
+        record_problems: problems,
+    };
+    assert_eq!(
+        reconcile(&input(EventSource::EventHistory, &[])).verdict,
+        Verdict::CompleteUnvalidated
+    );
+    assert_eq!(
+        reconcile(&input(EventSource::ValidatedTrail, &[])).verdict,
+        Verdict::Complete
+    );
+    let r = reconcile(&input(EventSource::ValidatedTrail, &*GAP));
+    assert_eq!(r.verdict, Verdict::Incomplete);
+    assert_eq!(kinds(&r), vec![Kind::RecordGap]);
 }

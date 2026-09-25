@@ -263,7 +263,7 @@ A run is **complete** when it has no session mismatch, no unwarranted event, no 
 
 The verdict is qualified, never silently upgraded:
 
-- **complete, unvalidated** when the events came from a source without integrity evidence, such as CloudTrail event history rather than validated trail log files (assumption 3);
+- **complete, unvalidated** when the events came from a source without integrity evidence, such as CloudTrail event history rather than validated trail log files (assumption 3, section 6.7);
 - **provisional** when `to` is later than the time of the run minus the settling period (assumption 5).
 
 Any failure makes the verdict **incomplete**, with every finding listed.
@@ -284,6 +284,24 @@ The signature is Ed25519 over the 8 bytes `REMITRv1` followed by the result's ex
 The prefix separates the two things Remit signs: a warrant's signed bytes begin with `REMITWv1` (section 3.6), so a signature over a result can never be presented as a signature over a warrant, or the reverse, and a signer refuses to sign in the warrant domain through the result interface.
 The signature travels beside the result as a JSON file, `<result>.sig`: `{"domain": "REMITRv1", "key": <the signer's key identifier, section 5.1>, "signature": <64 bytes, lowercase hex>}`.
 A verifier is given the key it expects, refuses any other domain or key, and checks the signature with the strict rules of section 5.2 before parsing the result.
+
+### 6.7 A validated record
+
+A run may take its events from the trail's log files instead of event history, and then, and only then, its verdict may be **complete**.
+With log file integrity validation on, CloudTrail delivers a digest file every hour in every region, even an hour with no activity, listing the SHA-256 of the uncompressed content of each log file delivered in that hour, and chained to the previous digest by its location, the SHA-256 of its uncompressed content, and its RSA signature (CloudTrail user guide, "CloudTrail digest file structure" and "Custom implementations of CloudTrail log file integrity validation").
+
+For each region the run covers, the reconciler requires a chain of digests that:
+
+1. were read from the bucket and key they record;
+2. each verify with SHA-256 and RSA (PKCS #1 v1.5) under the CloudTrail public key their fingerprint names, over the end time, `bucket/key`, the hex SHA-256 of the digest's uncompressed bytes and the previous digest's signature, each on its own line; the newest digest's signature is read from its object's `x-amz-meta-signature`, and every older one's from its successor;
+3. link without a break: each names the previous one's location, hash and signature, and starts where the previous one ends, so there is no hour without a digest;
+4. are not restarted inside the window: a starting digest, with no previous digest, means validation was turned off and on again;
+5. cover the window from its start to its end plus the settling period, measured in delivery time, which is what digests record; and
+6. list log files that are all present and whose SHA-256 matches.
+
+Every failure is a **record gap** finding and fails the run.
+The events are then the records of the verified log files whose event time falls in the window.
+**Unverified:** that the hash of the digest's own content in item 2 is over its uncompressed bytes. AWS states this for the previous digest's hash and for log files but not in so many words for the current digest; the fact that settles it is one real digest verifying.
 
 ## 7. What Remit does not claim
 

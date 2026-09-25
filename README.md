@@ -27,7 +27,7 @@ Early. The specification, the threat model, warrants, signatures and delegation 
 | Signed warrants, strict decoding, delegation chains | Implemented, property-tested (ADR 0003) |
 | Session policy compiler (AWS) | Implemented, property-tested, checked against AWS's policy simulator |
 | AWS broker and `remit` command | Implemented; first live session run on 2026-09-24, CloudTrail carries the warrant id |
-| Reconciler and `remit reconcile` | Implemented; first real run on 2026-09-24 over 384 events, verdict incomplete for three real one-second session overruns, now prevented (conformance/RESULTS.md) |
+| Reconciler and `remit reconcile` | Implemented; first real run on 2026-09-24 over 384 events, verdict incomplete for three real one-second session overruns, now prevented (conformance/RESULTS.md). With a copy of the trail's validated log files (`--trail-dir`, SPEC 6.7) it verifies CloudTrail's signed digest chain hour by hour and can say `complete` |
 | Witnessed log (`remit-log`, `remit-logstore`, `remit log`) | Implemented: RFC 9162 tree, C2SP checkpoints, cosignatures, witness and tiles, tested against the RFC, transparency-dev's proof corpus and the reference Go implementations. `remit run` refuses any chain not proven logged, and `remit reconcile` joins only to warrants the log establishes (ADR 0007). Not yet hosted |
 | Approvers (`remit-approver`, `remit approve`) | Implemented: one action at a time, only inside a bound a human signed, checked before anything else; the risk band from AWS's own per-action metadata (`remit reference fetch`), a model such as Jev or the self-hosted jeff optional; every doubt goes to a person (ADR 0008, SPEC 10). Demo: `examples/approver/demo.sh` |
 

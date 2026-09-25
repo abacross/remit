@@ -1857,6 +1857,7 @@ dependencies = [
  "aws-sdk-iam",
  "aws-sdk-sts",
  "clap",
+ "flate2",
  "getrandom 0.4.3",
  "remit-approver",
  "remit-aws",
@@ -1905,8 +1906,10 @@ version = "0.1.0"
 dependencies = [
  "remit-aws",
  "remit-core",
+ "ring",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
 ]
 
 [[package]]

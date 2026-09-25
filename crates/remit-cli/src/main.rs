@@ -15,6 +15,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 mod approve;
 mod log;
+mod trail;
 
 use clap::{Args, Parser, Subcommand};
 use remit_core::{
@@ -94,6 +95,20 @@ struct ReconcileArgs {
     /// assumption 5); the report states the value used.
     #[arg(long, default_value_t = remit_reconcile::DEFAULT_SETTLE_SECONDS)]
     settle_seconds: u64,
+    /// A local copy of the trail's S3 bucket (its `AWSLogs/...` keys as paths): events come
+    /// from validated log files instead of event history (SPEC 6.7).
+    #[arg(long, requires_all = ["trail_bucket", "trail_keys", "trail_signatures"])]
+    trail_dir: Option<PathBuf>,
+    /// The bucket the copy was taken from, as its digests record it.
+    #[arg(long)]
+    trail_bucket: Option<String>,
+    /// CloudTrail's public keys: the JSON of `aws cloudtrail list-public-keys`.
+    #[arg(long)]
+    trail_keys: Option<PathBuf>,
+    /// The newest digests' signatures from their S3 metadata: a JSON object mapping each
+    /// digest's key to its `x-amz-meta-signature`.
+    #[arg(long)]
+    trail_signatures: Option<PathBuf>,
     /// The reconciler's seed file, which signs the report.
     #[arg(long)]
     key: PathBuf,
@@ -482,6 +497,70 @@ async fn fetch_events(
     Ok(events)
 }
 
+/// The events of the window: from validated trail files when a local copy is given
+/// (SPEC 6.7), otherwise from CloudTrail event history; with any record problems and the
+/// coverage the trail established.
+async fn gather_events(
+    args: &ReconcileArgs,
+    config: &aws_config::SdkConfig,
+    from: u64,
+    to: u64,
+) -> Result<(
+    Vec<remit_reconcile::Event>,
+    remit_reconcile::EventSource,
+    Vec<String>,
+    Vec<remit_reconcile::trail::Coverage>,
+)> {
+    let mut events = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    let mut record_problems = Vec::new();
+    let mut coverage = Vec::new();
+    let source = if let (Some(dir), Some(bucket), Some(keys), Some(sigs)) = (
+        &args.trail_dir,
+        &args.trail_bucket,
+        &args.trail_keys,
+        &args.trail_signatures,
+    ) {
+        // Delivered from the window's start to its end plus the settling period.
+        let need_to = to.saturating_add(args.settle_seconds);
+        let local = trail::load(dir, bucket, keys, sigs)?;
+        let v = remit_reconcile::trail::validate(
+            &local.digests,
+            &local.logs,
+            &local.keys,
+            &args.regions,
+            from,
+            need_to,
+        );
+        for r in &v.records {
+            let e = remit_reconcile::Event::from_json(r).map_err(|e| e.to_string())?;
+            if e.time >= from && e.time <= to && seen.insert(e.id.clone()) {
+                events.push(e);
+            }
+        }
+        eprintln!(
+            "remit: validated trail: {} digests, {} log files, {} problems",
+            v.coverage.iter().map(|c| c.digests).sum::<usize>(),
+            v.coverage.iter().map(|c| c.log_files).sum::<usize>(),
+            v.problems.len()
+        );
+        record_problems = v.problems;
+        coverage = v.coverage;
+        remit_reconcile::EventSource::ValidatedTrail
+    } else {
+        for region in &args.regions {
+            for e in fetch_events(config, region, from, to).await? {
+                if seen.insert(e.id.clone()) {
+                    events.push(e);
+                }
+            }
+        }
+        remit_reconcile::EventSource::EventHistory
+    };
+
+    Ok((events, source, record_problems, coverage))
+}
+
 async fn reconcile(args: ReconcileArgs) -> Result<ExitCode> {
     let from = remit_aws_parse(&args.from)?;
     let to = remit_aws_parse(&args.to)?;
@@ -533,15 +612,8 @@ async fn reconcile(args: ReconcileArgs) -> Result<ExitCode> {
         });
     }
 
-    let mut events = Vec::new();
-    let mut seen = std::collections::BTreeSet::new();
-    for region in &args.regions {
-        for e in fetch_events(&config, region, from, to).await? {
-            if seen.insert(e.id.clone()) {
-                events.push(e);
-            }
-        }
-    }
+    let (events, source, record_problems, coverage) =
+        gather_events(&args, &config, from, to).await?;
 
     let mut report = remit_reconcile::reconcile(&remit_reconcile::Input {
         warrants: &warrants,
@@ -551,10 +623,12 @@ async fn reconcile(args: ReconcileArgs) -> Result<ExitCode> {
         to,
         now: now(),
         settle_seconds: args.settle_seconds,
-        source: remit_reconcile::EventSource::EventHistory,
+        source,
         regions: &args.regions,
+        record_problems: &record_problems,
     });
     report.refused_inputs = refused;
+    report.record_coverage = coverage;
     report.log = Some(position);
     let json = report.to_json().map_err(|e| e.to_string())?;
     let signature = remit_core::sign_in_domain(&signer, REPORT_DOMAIN, json.as_bytes())

@@ -16,3 +16,5 @@ remit-core = { path = "../remit-core" }
 remit-aws = { path = "../remit-aws" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
+ring = "0.17.14"
+sha2 = "0.11.0"

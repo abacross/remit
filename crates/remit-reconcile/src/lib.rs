@@ -8,6 +8,7 @@
 #![forbid(unsafe_code)]
 
 pub mod event;
+pub mod trail;
 pub mod trust;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -66,6 +67,8 @@ pub struct Input<'a> {
     pub source: EventSource,
     /// The regions the events were gathered from; the verdict speaks for these only.
     pub regions: &'a [String],
+    /// Problems found validating the record itself (SPEC 6.7): each fails the run.
+    pub record_problems: &'a [String],
 }
 
 /// What kind of finding (SPEC sections 6.2 and 6.3).
@@ -86,6 +89,9 @@ pub enum Kind {
     RefusedAttempt,
     /// Information: a managed action whose resource could not be determined.
     Undetermined,
+    /// The record itself is incomplete or altered: a digest or log file that does not
+    /// verify, a gap between digests, a region or hour not covered (SPEC 6.7).
+    RecordGap,
 }
 
 impl Kind {
@@ -153,6 +159,9 @@ pub struct Report {
     /// The log checkpoint the warrants were established at (SPEC 9.4); filled by the
     /// caller, which read the log.
     pub log: Option<LogPosition>,
+    /// For a validated trail, what each region's verified digest chain covers (SPEC 6.7);
+    /// filled by the caller, which validated it.
+    pub record_coverage: Vec<trail::Coverage>,
     /// The managed roles and whether each trust policy held.
     pub roles: BTreeMap<String, bool>,
     /// The verdict.
@@ -212,6 +221,9 @@ pub fn reconcile(input: &Input<'_>) -> Report {
             add(Kind::TrustPolicy, &role.arn, p.clone());
         }
     }
+    for p in input.record_problems {
+        add(Kind::RecordGap, "cloud record", p.clone());
+    }
 
     for e in input.events {
         let is_session_creation = e.source == "sts.amazonaws.com"
@@ -257,6 +269,7 @@ pub fn reconcile(input: &Input<'_>) -> Report {
         regions: input.regions.to_vec(),
         refused_inputs: Vec::new(),
         log: None,
+        record_coverage: Vec::new(),
         roles: input
             .roles
             .iter()
