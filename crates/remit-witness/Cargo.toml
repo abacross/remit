@@ -1,0 +1,25 @@
+[package]
+name = "remit-witness"
+description = "A Remit witness over HTTP (c2sp.org/tlog-witness), and the client a log uses to reach one (SPEC section 9.2)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+remit-log = { path = "../remit-log" }
+remit-logstore = { path = "../remit-logstore" }
+hyper = { version = "1.11.1", features = ["server", "http1"] }
+hyper-util = { version = "0.1.21", features = ["tokio"] }
+http-body-util = "0.1.5"
+tokio = { version = "1.53.1", features = ["rt", "net", "macros", "sync"] }
+ureq = "3.4.2"
+
+[dev-dependencies]
+remit-core = { path = "../remit-core" }
+tokio = { version = "1.53.1", features = ["rt-multi-thread"] }

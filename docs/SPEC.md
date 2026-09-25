@@ -383,6 +383,8 @@ A checkpoint is the log's origin, size and root, as a signed note (tlog-checkpoi
 1. The log signs with an Ed25519 note key (signature type `0x01`) whose key name is the log's origin.
 2. A checkpoint has no extension lines. The checkpoint specification calls them not auditable; Remit refuses them.
 3. A witness cosigns with a timestamped Ed25519 key (signature type `0x04`, tlog-cosignature), and only after the checks of tlog-witness: the checkpoint is signed by a log key it trusts for the origin; its old size is the size of the last checkpoint it cosigned for that origin; the consistency proof from that checkpoint verifies (section 2.1.4 of RFC 9162); a checkpoint of the same size has the same root; a checkpoint of size zero has the empty tree's root.
+Witnesses are reached over HTTP with tlog-witness's `add-checkpoint` call; `remit witness serve` is a witness any party can run, and it answers each refusal with the status that specification assigns.
+
 4. A verifier holds a **trust policy**: the log's key, the witness keys it trusts, and a quorum `k`. A checkpoint is trusted when its note verifies, it is signed by the log key for the log's own origin, and at least `k` distinct witness public keys cosigned it. A signature line from a key the verifier knows that fails to verify rejects the whole note; lines from unknown keys are ignored.
 
 Base64 in notes, keys and checkpoints has one accepted spelling (RFC 4648 section 4, padded, with zero unused bits), so a signed object cannot be re-encoded without breaking its signature.

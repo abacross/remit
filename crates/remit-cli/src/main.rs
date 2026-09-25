@@ -54,6 +54,9 @@ enum Top {
     /// The witnessed log: create, append, cosign, prove and verify (SPEC 9).
     #[command(subcommand)]
     Log(log::LogCmd),
+    /// Run a witness (tlog-witness over HTTP) that cosigns only consistent checkpoints.
+    #[command(subcommand)]
+    Witness(WitnessCmd),
     /// Verify a signed reconciliation report offline.
     VerifyReport {
         /// The report.
@@ -115,6 +118,12 @@ struct ReconcileArgs {
     /// Where to write the report; the signature goes beside it as `<out>.sig`.
     #[arg(long)]
     out: PathBuf,
+}
+
+#[derive(Subcommand)]
+enum WitnessCmd {
+    /// Serve until interrupted.
+    Serve(log::WitnessServeArgs),
 }
 
 #[derive(Subcommand)]
@@ -790,6 +799,9 @@ async fn main() -> ExitCode {
         Top::Run(r) => run(r).await,
         Top::Reconcile(r) => reconcile(r).await,
         Top::Log(l) => log::command(l).map(|()| ExitCode::SUCCESS),
+        Top::Witness(WitnessCmd::Serve(a)) => {
+            log::serve_witness(a).await.map(|()| ExitCode::SUCCESS)
+        }
         Top::Approve(a) => approve::command(&a),
         Top::Reference(ReferenceCmd::Fetch { out, services }) => {
             approve::fetch_reference(&out, &services).map(|()| ExitCode::SUCCESS)

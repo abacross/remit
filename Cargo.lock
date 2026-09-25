@@ -1303,6 +1303,7 @@ dependencies = [
  "http 1.5.0",
  "http-body 1.1.0",
  "httparse",
+ "httpdate",
  "itoa",
  "pin-project-lite",
  "smallvec",
@@ -1866,6 +1867,7 @@ dependencies = [
  "remit-log",
  "remit-logstore",
  "remit-reconcile",
+ "remit-witness",
  "serde_json",
  "tokio",
  "ureq",
@@ -1910,6 +1912,20 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
+]
+
+[[package]]
+name = "remit-witness"
+version = "0.1.0"
+dependencies = [
+ "http-body-util",
+ "hyper 1.11.1",
+ "hyper-util",
+ "remit-core",
+ "remit-log",
+ "remit-logstore",
+ "tokio",
+ "ureq",
 ]
 
 [[package]]

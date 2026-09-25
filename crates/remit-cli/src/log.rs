@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use clap::{Args, Subcommand, ValueEnum};
 use remit_log::{Entry, KeyKind, LoggedProof, NoteSigner, TrustPolicy};
 use remit_logstore::{Cosigner, LocalWitness, Log, LogDir};
+use remit_witness::HttpWitness;
 
 use crate::{Result, now, read_chain, read_report_signature, read_seed_bytes, write_new};
 
@@ -119,6 +120,9 @@ pub(crate) struct WitnessArgs {
     /// The witness's state file, which must survive between runs.
     #[arg(long)]
     witness_state: Option<PathBuf>,
+    /// A witness reached over HTTP (tlog-witness): its submission URL; repeat for more.
+    #[arg(long = "witness-url")]
+    witness_urls: Vec<String>,
 }
 
 fn signer(path: &Path, name: &str, kind: KeyKind) -> Result<NoteSigner> {
@@ -163,14 +167,36 @@ fn report(appended: &remit_logstore::Appended, added: usize) {
     print!("{}", appended.checkpoint);
 }
 
-fn append(log: &mut Log, entries: &[Entry], witness: &WitnessArgs) -> Result<()> {
-    let mut w = local_witness(witness, log)?;
-    let mut cosigners: Vec<&mut dyn Cosigner> = Vec::new();
-    if let Some(w) = w.as_mut() {
-        cosigners.push(w);
+/// Every witness the arguments name: a local one, and any reached over HTTP.
+fn witnesses(log: &Log, args: &WitnessArgs) -> Result<(Option<LocalWitness>, Vec<HttpWitness>)> {
+    let local = local_witness(args, log)?;
+    let remote = args
+        .witness_urls
+        .iter()
+        .map(|u| HttpWitness::new(u))
+        .collect();
+    Ok((local, remote))
+}
+
+/// The witnesses as the cosigner list a log takes.
+fn as_cosigners<'a>(
+    local: &'a mut Option<LocalWitness>,
+    remote: &'a mut [HttpWitness],
+) -> Vec<&'a mut dyn Cosigner> {
+    let mut list: Vec<&mut dyn Cosigner> = Vec::new();
+    if let Some(w) = local.as_mut() {
+        list.push(w);
     }
+    for r in remote {
+        list.push(r);
+    }
+    list
+}
+
+fn append(log: &mut Log, entries: &[Entry], witness: &WitnessArgs) -> Result<()> {
+    let (mut local, mut remote) = witnesses(log, witness)?;
     let appended = log
-        .append(entries, &mut cosigners)
+        .append(entries, &mut as_cosigners(&mut local, &mut remote))
         .map_err(|e| e.to_string())?;
     report(&appended, entries.len());
     Ok(())
@@ -229,8 +255,14 @@ pub(crate) fn command(cmd: LogCmd) -> Result<()> {
         }
         LogCmd::Cosign { log, witness } => {
             let mut l = open_log(&log)?;
-            let mut w = local_witness(&witness, &l)?.ok_or("no witness given")?;
-            let appended = l.cosign_current(&mut [&mut w]).map_err(|e| e.to_string())?;
+            let (mut local, mut remote) = witnesses(&l, &witness)?;
+            let mut cosigners = as_cosigners(&mut local, &mut remote);
+            if cosigners.is_empty() {
+                return Err("no witness given".into());
+            }
+            let appended = l
+                .cosign_current(&mut cosigners)
+                .map_err(|e| e.to_string())?;
             report(&appended, 0);
         }
         LogCmd::Prove {
@@ -238,35 +270,7 @@ pub(crate) fn command(cmd: LogCmd) -> Result<()> {
             policy,
             chain,
             out,
-        } => {
-            let policy = read_policy(&policy)?;
-            let links = read_chain(&chain)?;
-            let d = LogDir::new(&dir);
-            let checkpoint = d.checkpoint(&policy.log).map_err(|e| e.to_string())?;
-            let size = checkpoint.size();
-            let mut proofs = Vec::new();
-            for (i, link) in links.iter().enumerate() {
-                let entry = Entry::warrant(link.clone()).map_err(|e| e.to_string())?;
-                let index = d
-                    .find(&entry, size)
-                    .map_err(|e| e.to_string())?
-                    .ok_or_else(|| format!("link {i} of the chain is not in the log"))?;
-                proofs.push((
-                    index,
-                    d.inclusion_proof(index, size).map_err(|e| e.to_string())?,
-                ));
-            }
-            let proof = LoggedProof {
-                links: proofs,
-                checkpoint: d.checkpoint_text().map_err(|e| e.to_string())?,
-            };
-            // Written only if it would convince the broker.
-            proof
-                .verify(&links, &policy)
-                .map_err(|e| format!("not provable under this policy: {e}"))?;
-            write_new(&out, proof.encode().as_bytes())?;
-            eprintln!("remit: {} links proven in a log of {size}", links.len());
-        }
+        } => prove(&dir, &policy, &chain, &out)?,
         LogCmd::Verify {
             policy,
             chain,
@@ -284,6 +288,39 @@ pub(crate) fn command(cmd: LogCmd) -> Result<()> {
     Ok(())
 }
 
+/// `remit log prove`: the proof that every link of a chain is logged, written only if it
+/// satisfies the policy it is proven under.
+fn prove(dir: &Path, policy: &Path, chain: &Path, out: &Path) -> Result<()> {
+    let policy = read_policy(policy)?;
+    let links = read_chain(chain)?;
+    let d = LogDir::new(dir);
+    let checkpoint = d.checkpoint(&policy.log).map_err(|e| e.to_string())?;
+    let size = checkpoint.size();
+    let mut proofs = Vec::new();
+    for (i, link) in links.iter().enumerate() {
+        let entry = Entry::warrant(link.clone()).map_err(|e| e.to_string())?;
+        let index = d
+            .find(&entry, size)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("link {i} of the chain is not in the log"))?;
+        proofs.push((
+            index,
+            d.inclusion_proof(index, size).map_err(|e| e.to_string())?,
+        ));
+    }
+    let proof = LoggedProof {
+        links: proofs,
+        checkpoint: d.checkpoint_text().map_err(|e| e.to_string())?,
+    };
+    // Written only if it would convince the broker.
+    proof
+        .verify(&links, &policy)
+        .map_err(|e| format!("not provable under this policy: {e}"))?;
+    write_new(out, proof.encode().as_bytes())?;
+    eprintln!("remit: {} links proven in a log of {size}", links.len());
+    Ok(())
+}
+
 /// Verifies that a chain is proven logged under a policy (SPEC section 9.3).
 pub(crate) fn verify_logged(
     policy: &Path,
@@ -297,4 +334,43 @@ pub(crate) fn verify_logged(
     proof
         .verify(&links, &policy)
         .map_err(|e| format!("not logged: {e}"))
+}
+
+#[derive(Args)]
+pub(crate) struct WitnessServeArgs {
+    /// The witness's seed file.
+    #[arg(long)]
+    key: PathBuf,
+    /// The witness's name, as logs and verifiers know it.
+    #[arg(long)]
+    name: String,
+    /// A log it follows, as a verifier key (`remit log vkey --kind log`); repeat for more.
+    #[arg(long = "log", required = true)]
+    logs: Vec<String>,
+    /// Its state file: the last checkpoint it cosigned per log. It must survive restarts.
+    #[arg(long)]
+    state: PathBuf,
+    /// Where to listen, such as `127.0.0.1:8330`. Put TLS in front of it for anything public.
+    #[arg(long, default_value = "127.0.0.1:8330")]
+    listen: String,
+}
+
+/// `remit witness serve`: a tlog-witness over HTTP until interrupted.
+pub(crate) async fn serve_witness(args: WitnessServeArgs) -> Result<()> {
+    let logs = args
+        .logs
+        .iter()
+        .map(|v| remit_log::VerifierKey::parse(v).map_err(|e| format!("--log {v}: {e}")))
+        .collect::<Result<Vec<_>>>()?;
+    let key = signer(&args.key, &args.name, KeyKind::Witness)?;
+    let vkey = key.verifier_key().to_vkey();
+    let w = LocalWitness::open(key, logs, &args.state, now).map_err(|e| e.to_string())?;
+    let listener = tokio::net::TcpListener::bind(&args.listen)
+        .await
+        .map_err(|e| format!("{}: {e}", args.listen))?;
+    let addr = listener.local_addr().map_err(|e| e.to_string())?;
+    eprintln!("remit: witness {vkey} on http://{addr}/add-checkpoint");
+    remit_witness::serve(listener, w)
+        .await
+        .map_err(|e| e.to_string())
 }
