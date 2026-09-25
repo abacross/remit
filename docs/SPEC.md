@@ -301,7 +301,7 @@ For each region the run covers, the reconciler requires a chain of digests that:
 
 Every failure is a **record gap** finding and fails the run.
 The events are then the records of the verified log files whose event time falls in the window.
-**Unverified:** that the hash of the digest's own content in item 2 is over its uncompressed bytes. AWS states this for the previous digest's hash and for log files but not in so many words for the current digest; the fact that settles it is one real digest verifying.
+The hash in item 2 is over the digest's uncompressed bytes, as for the previous digest and the log files: settled on 2026-09-25, when 74 real digests from two regions verified (conformance/RESULTS.md).
 
 ## 7. What Remit does not claim
 

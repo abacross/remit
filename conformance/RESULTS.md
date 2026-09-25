@@ -90,3 +90,13 @@ The witness's post-quantum cosignatures (c2sp.org/tlog-cosignature, type `0x06`)
 - A checkpoint cosigned by the reference opens in remit-log under a policy requiring that witness.
 - A checkpoint cosigned by remit-log verifies with the reference (`go run . verify`: "verified 1 signature(s) by witness.example.com/pq"), and the same note with one signature byte flipped is rejected ("invalid signature").
 - End to end with the binary: `remit witness serve --algorithm ml-dsa-44` over HTTP, a log appended through it, a proof verified under a policy requiring it.
+
+## The first complete verdict, 2026-09-25 (decision 40)
+
+The window of decision 39's live loop (2026-09-24 21:40:27Z to 22:00:27Z, us-east-1 and us-west-2, settling period two hours) reconciled again, this time from the validated trail instead of event history: `scripts/fetch-trail.sh` copied `agent-proof-trail`'s digest and log files for 2026-09-24 and 2026-09-25 in both regions, the regions' CloudTrail public keys (one per region, each fetched from its region), and the newest digests' S3 signatures.
+
+- **The record verified:** 74 digests, 37 per region, each signature verified with AWS's RSA key for its region, every link and every hour accounted for across the window and the settling period; 75 log files, every hash matching. No record problem.
+- **Verdict: complete**, the first. The same 27 events as the event-history run, one session and two actions joined to the logged warrant, the trust policy held, and the one finding is information (`GetCallerIdentity` names no resource).
+- This settled SPEC 6.7's one open detail: a digest's own hash in the signed string is over its uncompressed bytes; had it not been, no real signature would have verified.
+- The run found a defect in the fetch script first: it fetched public keys once, without a region, where each region signs with its own key; fixed before the run.
+- The signed report is appended to the development log with its witness cosignature.
