@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 7a0be43342f17c537a493e10159f642c22c6126e9724b9877bfc0ecb3f0fbba0 # shrinks to service = "s3", verb = "GetObject", bucket = "payroll", key = ""

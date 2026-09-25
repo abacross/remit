@@ -42,4 +42,6 @@ pub use signed::{
     ChainError, IssuerKey, KeyId, MAX_CHAIN, RESULT_DOMAIN, SignatureError, SignedWarrant,
     decode_chain, encode_chain, sign_in_domain, verify_chain, verify_in_domain,
 };
-pub use warrant::{Grant, Identifier, Request, Warrant, WarrantError, WarrantId, WarrantSpec};
+pub use warrant::{
+    Grant, Identifier, MAX_PURPOSE, Request, Warrant, WarrantError, WarrantId, WarrantSpec,
+};
