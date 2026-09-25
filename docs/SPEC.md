@@ -438,3 +438,15 @@ Its purpose is the evidence line of 10.5, followed by ` | ` and the agent's purp
 The evidence line is `remit-approval/v1` followed by space-separated `key=value` fields: `decider` (the decider's name), `model` (the model the decider reports), `band`, `p` (the probability, four decimals), `threshold`, and `input`.
 `input` is `sha256:` and the first 16 bytes, in lowercase hex, of the SHA-256 of the state shown to the decider: a JSON object with the keys `action`, `context`, `purpose` and `resource`, in that order, without whitespace.
 Because the approver signs the child and the child is logged before use (section 9.3), the evidence is public and cannot be altered after the fact.
+
+### 10.6 Bands from AWS's service reference
+
+An approver may take the band from AWS's service reference information, the machine-readable metadata AWS publishes for every IAM action, instead of from a model.
+Each action carries four flags, `IsList`, `IsWrite`, `IsPermissionManagement` and `IsTaggingOnly`, and all four false means the action only reads (AWS, Service Authorization Reference, "Simplified AWS service information for programmatic access").
+The band is `sensitive_or_external` when `IsPermissionManagement` is set; otherwise `destructive` for a write whose name begins with `Delete`, `Terminate`, `Destroy`, `Purge`, `Remove` or `Revoke`; otherwise `reversible_change` for any other write or a tagging-only action; otherwise `read_only`.
+AWS does not say which writes cannot be undone, so the `destructive` split is this specification's judgement from the verb; it changes only the reason given, since by default every band but `read_only` goes to a person.
+An action the loaded reference does not list is escalated.
+
+Taken this way, the band cannot be moved by anything the agent writes.
+Two things it cannot tell, and which the approver must handle elsewhere: whether a particular resource is sensitive (reading one object is a read, whatever the object holds), which is the bound's job or an optional model's; and reads AWS does not flag at all though they disclose secrets, such as `secretsmanager:GetSecretValue` and `ssm:GetParameter`, which the default hard rules send to a person.
+When a model is also configured, its band is ignored and its probability decides only whether a read is safe without a person.

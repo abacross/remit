@@ -47,6 +47,9 @@ enum Top {
     Reconcile(ReconcileArgs),
     /// Ask an approver for one action, inside a bound a human signed (SPEC 10).
     Approve(approve::ApproveArgs),
+    /// AWS's service reference, from which approvers take an action's risk band.
+    #[command(subcommand)]
+    Reference(ReferenceCmd),
     /// The witnessed log: create, append, cosign, prove and verify (SPEC 9).
     #[command(subcommand)]
     Log(log::LogCmd),
@@ -97,6 +100,19 @@ struct ReconcileArgs {
     /// Where to write the report; the signature goes beside it as `<out>.sig`.
     #[arg(long)]
     out: PathBuf,
+}
+
+#[derive(Subcommand)]
+enum ReferenceCmd {
+    /// Download AWS's service reference files (public, no AWS account needed).
+    Fetch {
+        /// The directory to write `<service>.json` files into.
+        #[arg(long)]
+        out: PathBuf,
+        /// Only these services (IAM prefixes such as `s3`); all when absent.
+        #[arg(long = "service")]
+        services: Vec<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -701,6 +717,9 @@ async fn main() -> ExitCode {
         Top::Reconcile(r) => reconcile(r).await,
         Top::Log(l) => log::command(l).map(|()| ExitCode::SUCCESS),
         Top::Approve(a) => approve::command(&a),
+        Top::Reference(ReferenceCmd::Fetch { out, services }) => {
+            approve::fetch_reference(&out, &services).map(|()| ExitCode::SUCCESS)
+        }
         Top::VerifyReport {
             report,
             signature,

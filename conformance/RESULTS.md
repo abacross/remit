@@ -67,3 +67,17 @@ One warrant through every part: issued by a throwaway test root, logged, used, r
 - **jeff is not confident enough to approve anything at 0.9**, not even a harmless read, and its score also moved with the wording of the purpose (0.674 and 0.594 for the same call). Its authors describe its numbers as renormalized scores, not calibrated probabilities. Consequence: the risk band should come from AWS's own per-action metadata (the service reference's `IsList`, `IsWrite`, `IsPermissionManagement`, `IsTaggingOnly`), which cannot be moved by text, leaving a model only the question of the resource and purpose.
 - **Failing closed, observed:** a request sent without the API key got HTTP 401 from the server and was escalated, not approved.
 - **The issue path**, exercised once at a threshold of 0.5 chosen only to reach it: `rw1-3pxkq6qohliozw2aeuj3ro3spn55zzlv`, one action on one resource for 20 minutes, `max_depth` 0, its purpose carrying the evidence line, and its chain verifying to the human's key.
+
+## Approver with AWS's service reference, 2026-09-24 (SPEC 10.6)
+
+The same bound (reads of one bucket), no model, with `s3.json` and `secretsmanager.json` fetched by `remit reference fetch` from AWS's public endpoint:
+
+| Request | Outcome |
+| --- | --- |
+| `s3:GetBucketLocation` | issued (a read by AWS's flags) |
+| `s3:GetObject` on `prod/.env`, with the injected approval | issued: a read, inside the bound |
+| `s3:PutObject`, with the injected approval | refused by the bound |
+| `s3:DeleteBucket`, with the injected approval | refused by the bound |
+| `secretsmanager:GetSecretValue` | refused by the bound |
+
+Across 500 generated contexts, the outcome for a read, a write, a deletion and a policy write never changed (property test), and inside a bound wide enough to allow them, writes and secret reads went to a person (unit tests). The `prod/.env` row is the limit SPEC 10.6 names: the reference says what an action is, not whether the object is sensitive; that is the bound's job (here, reads of the whole bucket were allowed) or an optional model's.

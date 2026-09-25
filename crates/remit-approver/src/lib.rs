@@ -12,6 +12,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod reference;
 pub mod system_one;
 
 use core::fmt;
@@ -117,8 +118,10 @@ pub struct Config {
 }
 
 impl Default for Config {
-    /// Read-only actions only, at 0.9 or above, for at most an hour; IAM, KMS, STS,
-    /// Organizations and any delete, put-policy or termination go to a person.
+    /// Read-only actions only, at 0.9 or above, for at most an hour. IAM, KMS, STS,
+    /// Organizations, any delete, put-policy or termination, and reads of secrets go to a
+    /// person: AWS's service reference classes `secretsmanager:GetSecretValue` and
+    /// `ssm:GetParameter` as plain reads, with no flag at all.
     fn default() -> Self {
         let rules = [
             "iam:*",
@@ -128,6 +131,9 @@ impl Default for Config {
             "*:Delete*",
             "*:Put*Policy*",
             "*:Terminate*",
+            "secretsmanager:GetSecretValue",
+            "secretsmanager:BatchGetSecretValue",
+            "ssm:GetParameter*",
         ];
         Self {
             hard_rules: rules
@@ -231,7 +237,7 @@ fn token(s: &str) -> String {
     let t: String = s
         .chars()
         .map(|c| {
-            if c.is_ascii_alphanumeric() || "._:/@-".contains(c) {
+            if c.is_ascii_alphanumeric() || "._:/@+-".contains(c) {
                 c
             } else {
                 '_'
