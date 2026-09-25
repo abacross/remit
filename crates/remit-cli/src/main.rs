@@ -215,6 +215,10 @@ enum WarrantCmd {
         /// Trusted root key identifiers.
         #[arg(long = "root")]
         roots: Vec<String>,
+        /// Also print the AWS session policy compiled from the leaf warrant (SPEC 8.2),
+        /// exactly as the broker would pass it, and its length against AWS's 2,048.
+        #[arg(long)]
+        session_policy: bool,
     },
 }
 
@@ -775,10 +779,24 @@ fn warrant(cmd: WarrantCmd) -> Result<()> {
             write_new(&out, &encode_chain(&links))?;
             print!("{}", describe(&child));
         }
-        WarrantCmd::Show { chain, roots: ids } => {
+        WarrantCmd::Show {
+            chain,
+            roots: ids,
+            session_policy,
+        } => {
             let links = read_chain(&chain)?;
             for l in &links {
                 print!("{}", describe(l.warrant()));
+            }
+            if session_policy {
+                let leaf = links.last().ok_or("empty chain")?.warrant();
+                match remit_aws::compile_session_policy(leaf) {
+                    Ok(policy) => println!(
+                        "session policy ({} of 2048 characters):\n{policy}",
+                        policy.len()
+                    ),
+                    Err(e) => return Err(format!("does not compile to a session policy: {e}")),
+                }
             }
             if !ids.is_empty() {
                 match verify_chain(&links, &roots(&ids)?) {
