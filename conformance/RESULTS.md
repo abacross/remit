@@ -81,3 +81,12 @@ The same bound (reads of one bucket), no model, with `s3.json` and `secretsmanag
 | `secretsmanager:GetSecretValue` | refused by the bound |
 
 Across 500 generated contexts, the outcome for a read, a write, a deletion and a policy write never changed (property test), and inside a bound wide enough to allow them, writes and secret reads went to a person (unit tests). The `prod/.env` row is the limit SPEC 10.6 names: the reference says what an action is, not whether the object is sensitive; that is the bound's job (here, reads of the whole bucket were allowed) or an optional model's.
+
+## ML-DSA-44 cosignatures against the reference, 2026-09-24
+
+The witness's post-quantum cosignatures (c2sp.org/tlog-cosignature, type `0x06`) were checked against the reference Go implementation, `transparency-dev/formats` v0.1.1 with `filippo.io/mldsa` (the program and its pinned versions are in `crates/remit-log/tests/vectors/go-mldsa/`).
+
+- From the same 32-byte seed, `aws-lc-rs` and the reference derive the same 1,312-byte public key and the same key ID.
+- A checkpoint cosigned by the reference opens in remit-log under a policy requiring that witness.
+- A checkpoint cosigned by remit-log verifies with the reference (`go run . verify`: "verified 1 signature(s) by witness.example.com/pq"), and the same note with one signature byte flipped is rejected ("invalid signature").
+- End to end with the binary: `remit witness serve --algorithm ml-dsa-44` over HTTP, a log appended through it, a proof verified under a policy requiring it.

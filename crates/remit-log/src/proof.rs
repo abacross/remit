@@ -203,7 +203,7 @@ impl TrustPolicy {
         }
         let log = log.ok_or(ProofFileError::Malformed("no log key"))?;
         let quorum = quorum.ok_or(ProofFileError::Malformed("no quorum"))?;
-        let mut distinct: Vec<[u8; 32]> = witnesses.iter().map(VerifierKey::public_key).collect();
+        let mut distinct: Vec<Vec<u8>> = witnesses.iter().map(VerifierKey::public_key).collect();
         distinct.sort_unstable();
         distinct.dedup();
         if quorum > distinct.len() {

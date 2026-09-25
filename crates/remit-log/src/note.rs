@@ -1,5 +1,7 @@
-//! Signed notes (c2sp.org/signed-note) with Ed25519 log signatures (type `0x01`) and
-//! timestamped Ed25519 witness cosignatures (type `0x04`, c2sp.org/tlog-cosignature).
+//! Signed notes (c2sp.org/signed-note) with Ed25519 log signatures (type `0x01`), and
+//! timestamped witness cosignatures (c2sp.org/tlog-cosignature) in Ed25519 (type `0x04`)
+//! or ML-DSA-44 (type `0x06`), the post-quantum form the specification recommends for new
+//! deployments. ML-DSA-44 is AWS-LC's (ADR 0007).
 //!
 //! A note is text followed by a blank line and one signature line per key. Verification
 //! follows the specification's rules, taking its "SHOULD" as "MUST": signatures by unknown
@@ -8,10 +10,18 @@
 
 use core::fmt;
 
+use aws_lc_rs::signature::{
+    KeyPair as _, ML_DSA_44, ML_DSA_44_SIGNING, PqdsaKeyPair, UnparsedPublicKey,
+};
 use ed25519_dalek::{Signature, Signer as _, SigningKey, VerifyingKey};
 use sha2::{Digest, Sha256};
 
 use crate::base64;
+use crate::checkpoint::Checkpoint;
+
+/// ML-DSA-44 public keys and signatures, in bytes (FIPS 204).
+const ML_DSA_44_PUBLIC_KEY_LEN: usize = 1312;
+const ML_DSA_44_SIGNATURE_LEN: usize = 2420;
 
 /// The largest note accepted, in bytes: room for 16 post-quantum signatures, which the
 /// specification says a verifier must accept, with margin.
@@ -68,11 +78,45 @@ pub enum KeyKind {
     Witness,
 }
 
-impl KeyKind {
-    fn type_byte(self) -> u8 {
+/// A key's signature algorithm.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Algorithm {
+    /// Ed25519 (RFC 8032).
+    Ed25519,
+    /// ML-DSA-44 (FIPS 204), for witnesses only.
+    MlDsa44,
+}
+
+/// The signature type byte for a role and algorithm; `None` for a pair no specification
+/// defines (a log signs with Ed25519 only).
+fn type_byte(kind: KeyKind, algorithm: Algorithm) -> Option<u8> {
+    match (kind, algorithm) {
+        (KeyKind::Log, Algorithm::Ed25519) => Some(0x01),
+        (KeyKind::Witness, Algorithm::Ed25519) => Some(0x04),
+        (KeyKind::Witness, Algorithm::MlDsa44) => Some(0x06),
+        (KeyKind::Log, Algorithm::MlDsa44) => None,
+    }
+}
+
+/// A public key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PublicKey {
+    Ed25519(VerifyingKey),
+    MlDsa44(Box<[u8]>),
+}
+
+impl PublicKey {
+    fn bytes(&self) -> &[u8] {
         match self {
-            Self::Log => 0x01,
-            Self::Witness => 0x04,
+            Self::Ed25519(k) => k.as_bytes(),
+            Self::MlDsa44(k) => k,
+        }
+    }
+
+    fn algorithm(&self) -> Algorithm {
+        match self {
+            Self::Ed25519(_) => Algorithm::Ed25519,
+            Self::MlDsa44(_) => Algorithm::MlDsa44,
         }
     }
 }
@@ -89,11 +133,11 @@ fn check_name(name: &str) -> Result<(), NoteError> {
 }
 
 /// The key identifier: the first four bytes of SHA-256(name || 0x0A || type || key).
-fn key_id(name: &str, kind: KeyKind, key: &VerifyingKey) -> u32 {
+fn key_id(name: &str, type_byte: u8, key: &[u8]) -> u32 {
     let mut hasher = Sha256::new();
     hasher.update(name.as_bytes());
-    hasher.update([b'\n', kind.type_byte()]);
-    hasher.update(key.as_bytes());
+    hasher.update([b'\n', type_byte]);
+    hasher.update(key);
     let digest: [u8; 32] = hasher.finalize().into();
     let (first, _) = digest.split_first_chunk::<4>().unwrap_or((&[0; 4], &[]));
     u32::from_be_bytes(*first)
@@ -105,23 +149,44 @@ pub struct VerifierKey {
     name: String,
     kind: KeyKind,
     id: u32,
-    key: VerifyingKey,
+    key: PublicKey,
 }
 
 impl VerifierKey {
-    /// A verifier key from its parts.
+    /// An Ed25519 verifier key from its parts.
     ///
     /// # Errors
     ///
     /// A bad name, or bytes that are not an Ed25519 public key.
     pub fn new(name: &str, kind: KeyKind, public: &[u8; 32]) -> Result<Self, NoteError> {
-        check_name(name)?;
         let key = VerifyingKey::from_bytes(public)
             .map_err(|_| NoteError::BadVerifierKey("not an Ed25519 public key"))?;
+        Self::from_parts(name, kind, PublicKey::Ed25519(key))
+    }
+
+    /// An ML-DSA-44 witness's verifier key from its name and 1,312-byte public key.
+    ///
+    /// # Errors
+    ///
+    /// A bad name, or a key of the wrong length.
+    pub fn ml_dsa_witness(name: &str, public: &[u8]) -> Result<Self, NoteError> {
+        if public.len() != ML_DSA_44_PUBLIC_KEY_LEN {
+            return Err(NoteError::BadVerifierKey(
+                "ML-DSA-44 public key is not 1312 bytes",
+            ));
+        }
+        Self::from_parts(name, KeyKind::Witness, PublicKey::MlDsa44(public.into()))
+    }
+
+    fn from_parts(name: &str, kind: KeyKind, key: PublicKey) -> Result<Self, NoteError> {
+        check_name(name)?;
+        let byte = type_byte(kind, key.algorithm()).ok_or(NoteError::BadVerifierKey(
+            "no signature type for this role and algorithm",
+        ))?;
         Ok(Self {
             name: name.to_owned(),
             kind,
-            id: key_id(name, kind, &key),
+            id: key_id(name, byte, key.bytes()),
             key,
         })
     }
@@ -149,15 +214,21 @@ impl VerifierKey {
                 ))?;
         let material =
             base64::decode(material).ok_or(NoteError::BadVerifierKey("key is not base64"))?;
-        let (kind, public) = match material.split_first() {
-            Some((0x01, rest)) => (KeyKind::Log, rest),
-            Some((0x04, rest)) => (KeyKind::Witness, rest),
+        let key = match material.split_first() {
+            Some((0x01 | 0x04, rest)) => {
+                let kind = if material.first() == Some(&0x01) {
+                    KeyKind::Log
+                } else {
+                    KeyKind::Witness
+                };
+                let public: &[u8; 32] = rest
+                    .try_into()
+                    .map_err(|_| NoteError::BadVerifierKey("public key is not 32 bytes"))?;
+                Self::new(name, kind, public)?
+            }
+            Some((0x06, rest)) => Self::ml_dsa_witness(name, rest)?,
             _ => return Err(NoteError::BadVerifierKey("unsupported signature type")),
         };
-        let public: &[u8; 32] = public
-            .try_into()
-            .map_err(|_| NoteError::BadVerifierKey("public key is not 32 bytes"))?;
-        let key = Self::new(name, kind, public)?;
         if key.id != id {
             return Err(NoteError::BadVerifierKey("key ID does not match the key"));
         }
@@ -167,8 +238,8 @@ impl VerifierKey {
     /// The text form.
     #[must_use]
     pub fn to_vkey(&self) -> String {
-        let mut material = vec![self.kind.type_byte()];
-        material.extend_from_slice(self.key.as_bytes());
+        let mut material = vec![type_byte(self.kind, self.key.algorithm()).unwrap_or(0)];
+        material.extend_from_slice(self.key.bytes());
         format!(
             "{}+{:08x}+{}",
             self.name,
@@ -195,17 +266,28 @@ impl VerifierKey {
         self.id
     }
 
+    /// Its signature algorithm.
+    #[must_use]
+    pub fn algorithm(&self) -> Algorithm {
+        self.key.algorithm()
+    }
+
     /// The raw public key.
     #[must_use]
-    pub fn public_key(&self) -> [u8; 32] {
-        self.key.to_bytes()
+    pub fn public_key(&self) -> Vec<u8> {
+        self.key.bytes().to_vec()
     }
 }
 
 /// A key that signs notes: a log's key, or a witness's.
 pub struct NoteSigner {
     verifier: VerifierKey,
-    signing: SigningKey,
+    signing: Signing,
+}
+
+enum Signing {
+    Ed25519(SigningKey),
+    MlDsa44(PqdsaKeyPair),
 }
 
 impl fmt::Debug for NoteSigner {
@@ -227,7 +309,26 @@ impl NoteSigner {
     pub fn from_seed(name: &str, kind: KeyKind, seed: &[u8; 32]) -> Result<Self, NoteError> {
         let signing = SigningKey::from_bytes(seed);
         let verifier = VerifierKey::new(name, kind, signing.verifying_key().as_bytes())?;
-        Ok(Self { verifier, signing })
+        Ok(Self {
+            verifier,
+            signing: Signing::Ed25519(signing),
+        })
+    }
+
+    /// An ML-DSA-44 witness from its 32-byte seed (FIPS 204 key generation from a seed, as
+    /// the reference implementations store keys).
+    ///
+    /// # Errors
+    ///
+    /// A bad name, or a seed AWS-LC refuses.
+    pub fn ml_dsa_witness_from_seed(name: &str, seed: &[u8; 32]) -> Result<Self, NoteError> {
+        let pair = PqdsaKeyPair::from_seed(&ML_DSA_44_SIGNING, seed)
+            .map_err(|_| NoteError::BadVerifierKey("ML-DSA-44 key generation failed"))?;
+        let verifier = VerifierKey::ml_dsa_witness(name, pair.public_key().as_ref())?;
+        Ok(Self {
+            verifier,
+            signing: Signing::MlDsa44(pair),
+        })
     }
 
     /// The matching verifier key.
@@ -245,15 +346,29 @@ impl NoteSigner {
     pub fn sign(&self, text: &str, time: u64) -> Result<String, NoteError> {
         check_text(text)?;
         let mut sig = self.verifier.id.to_be_bytes().to_vec();
-        match self.verifier.kind {
-            KeyKind::Log => sig.extend_from_slice(&self.signing.sign(text.as_bytes()).to_bytes()),
-            KeyKind::Witness => {
+        match (&self.signing, self.verifier.kind) {
+            (Signing::Ed25519(k), KeyKind::Log) => {
+                sig.extend_from_slice(&k.sign(text.as_bytes()).to_bytes());
+            }
+            (Signing::Ed25519(k), KeyKind::Witness) => {
                 if i64::try_from(time).is_err() {
                     return Err(NoteError::Malformed("timestamp above 2^63 - 1"));
                 }
                 let message = cosigned_message(text, time);
                 sig.extend_from_slice(&time.to_be_bytes());
-                sig.extend_from_slice(&self.signing.sign(message.as_bytes()).to_bytes());
+                sig.extend_from_slice(&k.sign(message.as_bytes()).to_bytes());
+            }
+            (Signing::MlDsa44(pair), _) => {
+                if i64::try_from(time).is_err() {
+                    return Err(NoteError::Malformed("timestamp above 2^63 - 1"));
+                }
+                let message = ml_dsa_message(&self.verifier.name, time, text)?;
+                let mut out = vec![0u8; ML_DSA_44_SIGNATURE_LEN];
+                let n = pair
+                    .sign(&message, &mut out)
+                    .map_err(|_| NoteError::Malformed("ML-DSA-44 signing failed"))?;
+                sig.extend_from_slice(&time.to_be_bytes());
+                sig.extend_from_slice(out.get(..n).unwrap_or_default());
             }
         }
         Ok(format!(
@@ -262,6 +377,28 @@ impl NoteSigner {
             base64::encode(&sig)
         ))
     }
+}
+
+/// The message an ML-DSA-44 cosignature signs (c2sp.org/tlog-cosignature): the label
+/// `subtree/v1\n\0`, the cosigner's name, the time, the log's origin, the subtree
+/// `[0, size)` and the root, lengths as one byte and integers big-endian. The checkpoint's
+/// extension lines, which Remit refuses anyway, are not covered.
+fn ml_dsa_message(cosigner: &str, time: u64, text: &str) -> Result<Vec<u8>, NoteError> {
+    let checkpoint = Checkpoint::parse(text)
+        .map_err(|_| NoteError::Malformed("an ML-DSA cosignature covers a checkpoint"))?;
+    let name = u8::try_from(cosigner.len()).map_err(|_| NoteError::BadKeyName)?;
+    let origin = u8::try_from(checkpoint.origin().len())
+        .map_err(|_| NoteError::Malformed("origin over 255 bytes"))?;
+    let mut m = b"subtree/v1\n\0".to_vec();
+    m.push(name);
+    m.extend_from_slice(cosigner.as_bytes());
+    m.extend_from_slice(&time.to_be_bytes());
+    m.push(origin);
+    m.extend_from_slice(checkpoint.origin().as_bytes());
+    m.extend_from_slice(&0u64.to_be_bytes());
+    m.extend_from_slice(&checkpoint.size().to_be_bytes());
+    m.extend_from_slice(checkpoint.root());
+    Ok(m)
 }
 
 fn cosigned_message(text: &str, time: u64) -> String {
@@ -426,22 +563,33 @@ fn parse_signature_line(line: &str) -> Result<SignatureLine, NoteError> {
 
 /// Verifies one signature: `Ok` on success, with the time for a cosignature.
 fn verify_one(key: &VerifierKey, text: &str, signature: &[u8]) -> Result<Option<u64>, ()> {
-    match key.kind {
-        KeyKind::Log => {
+    match (&key.key, key.kind) {
+        (PublicKey::Ed25519(k), KeyKind::Log) => {
             let sig: &[u8; 64] = signature.try_into().map_err(drop)?;
-            key.key
-                .verify_strict(text.as_bytes(), &Signature::from_bytes(sig))
+            k.verify_strict(text.as_bytes(), &Signature::from_bytes(sig))
                 .map_err(drop)?;
             Ok(None)
         }
-        KeyKind::Witness => {
+        (PublicKey::Ed25519(k), KeyKind::Witness) => {
             let (time, sig) = signature.split_first_chunk::<8>().ok_or(())?;
             let sig: &[u8; 64] = sig.try_into().map_err(drop)?;
             let time = u64::from_be_bytes(*time);
             i64::try_from(time).map_err(drop)?;
             let message = cosigned_message(text, time);
-            key.key
-                .verify_strict(message.as_bytes(), &Signature::from_bytes(sig))
+            k.verify_strict(message.as_bytes(), &Signature::from_bytes(sig))
+                .map_err(drop)?;
+            Ok(Some(time))
+        }
+        (PublicKey::MlDsa44(k), _) => {
+            let (time, sig) = signature.split_first_chunk::<8>().ok_or(())?;
+            if sig.len() != ML_DSA_44_SIGNATURE_LEN {
+                return Err(());
+            }
+            let time = u64::from_be_bytes(*time);
+            i64::try_from(time).map_err(drop)?;
+            let message = ml_dsa_message(&key.name, time, text).map_err(drop)?;
+            UnparsedPublicKey::new(&ML_DSA_44, k.as_ref())
+                .verify(&message, sig)
                 .map_err(drop)?;
             Ok(Some(time))
         }

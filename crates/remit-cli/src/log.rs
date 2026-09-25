@@ -12,6 +12,16 @@ use remit_witness::HttpWitness;
 
 use crate::{Result, now, read_chain, read_report_signature, read_seed_bytes, write_new};
 
+#[derive(Clone, Copy, ValueEnum, Default)]
+pub(crate) enum Alg {
+    /// Ed25519.
+    #[default]
+    Ed25519,
+    /// ML-DSA-44 (post-quantum; witnesses only).
+    #[value(name = "ml-dsa-44")]
+    MlDsa44,
+}
+
 #[derive(Clone, Copy, ValueEnum)]
 pub(crate) enum Kind {
     /// Signs a log's checkpoints.
@@ -33,6 +43,9 @@ pub(crate) enum LogCmd {
         /// What the key signs.
         #[arg(long, value_enum)]
         kind: Kind,
+        /// Its algorithm: ML-DSA-44 is for witnesses.
+        #[arg(long, value_enum, default_value_t)]
+        algorithm: Alg,
     },
     /// Create an empty log.
     Create(LogKeyArgs),
@@ -117,6 +130,9 @@ pub(crate) struct WitnessArgs {
     /// The witness's name.
     #[arg(long)]
     witness_name: Option<String>,
+    /// The witness key's algorithm.
+    #[arg(long, value_enum, default_value_t)]
+    witness_algorithm: Alg,
     /// The witness's state file, which must survive between runs.
     #[arg(long)]
     witness_state: Option<PathBuf>,
@@ -127,6 +143,15 @@ pub(crate) struct WitnessArgs {
 
 fn signer(path: &Path, name: &str, kind: KeyKind) -> Result<NoteSigner> {
     NoteSigner::from_seed(name, kind, &read_seed_bytes(path)?).map_err(|e| e.to_string())
+}
+
+/// A witness's signer in the chosen algorithm.
+fn witness_signer(path: &Path, name: &str, alg: Alg) -> Result<NoteSigner> {
+    match alg {
+        Alg::Ed25519 => signer(path, name, KeyKind::Witness),
+        Alg::MlDsa44 => NoteSigner::ml_dsa_witness_from_seed(name, &read_seed_bytes(path)?)
+            .map_err(|e| e.to_string()),
+    }
 }
 
 fn open_log(args: &LogKeyArgs) -> Result<Log> {
@@ -140,7 +165,7 @@ fn local_witness(args: &WitnessArgs, log: &Log) -> Result<Option<LocalWitness>> 
         return Ok(None);
     };
     LocalWitness::open(
-        signer(key, name, KeyKind::Witness)?,
+        witness_signer(key, name, args.witness_algorithm)?,
         vec![log.verifier_key().clone()],
         state,
         now,
@@ -209,12 +234,18 @@ pub(crate) fn read_policy(path: &Path) -> Result<TrustPolicy> {
 
 pub(crate) fn command(cmd: LogCmd) -> Result<()> {
     match cmd {
-        LogCmd::Vkey { key, name, kind } => {
-            let kind = match kind {
-                Kind::Log => KeyKind::Log,
-                Kind::Witness => KeyKind::Witness,
+        LogCmd::Vkey {
+            key,
+            name,
+            kind,
+            algorithm,
+        } => {
+            let s = match (kind, algorithm) {
+                (Kind::Log, Alg::Ed25519) => signer(&key, &name, KeyKind::Log)?,
+                (Kind::Log, Alg::MlDsa44) => return Err("a log key is Ed25519".into()),
+                (Kind::Witness, alg) => witness_signer(&key, &name, alg)?,
             };
-            println!("{}", signer(&key, &name, kind)?.verifier_key().to_vkey());
+            println!("{}", s.verifier_key().to_vkey());
         }
         LogCmd::Create(args) => {
             let log = Log::create(&args.dir, signer(&args.key, &args.origin, KeyKind::Log)?)
@@ -353,6 +384,10 @@ pub(crate) struct WitnessServeArgs {
     /// Where to listen, such as `127.0.0.1:8330`. Put TLS in front of it for anything public.
     #[arg(long, default_value = "127.0.0.1:8330")]
     listen: String,
+    /// The key's algorithm; ML-DSA-44 is the post-quantum form c2sp.org/tlog-cosignature
+    /// recommends for new witnesses.
+    #[arg(long, value_enum, default_value_t)]
+    algorithm: Alg,
 }
 
 /// `remit witness serve`: a tlog-witness over HTTP until interrupted.
@@ -362,7 +397,7 @@ pub(crate) async fn serve_witness(args: WitnessServeArgs) -> Result<()> {
         .iter()
         .map(|v| remit_log::VerifierKey::parse(v).map_err(|e| format!("--log {v}: {e}")))
         .collect::<Result<Vec<_>>>()?;
-    let key = signer(&args.key, &args.name, KeyKind::Witness)?;
+    let key = witness_signer(&args.key, &args.name, args.algorithm)?;
     let vkey = key.verifier_key().to_vkey();
     let w = LocalWitness::open(key, logs, &args.state, now).map_err(|e| e.to_string())?;
     let listener = tokio::net::TcpListener::bind(&args.listen)
