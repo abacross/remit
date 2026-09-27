@@ -1,0 +1,70 @@
+{
+  "name": "remit",
+  "displayName": "Remit",
+  "version": "0.1.0",
+  "description": "Your agent reaches the cloud only through a warrant a person signed: it can see and check its warrant, runs cloud commands through Remit's broker with short-lived credentials stamped with the warrant, and is stopped from calling cloud CLIs directly.",
+  "author": { "name": "Abacross", "url": "https://abacross.com" },
+  "homepage": "https://github.com/abacross/remit/tree/main/integrations/claude-plugin",
+  "repository": "https://github.com/abacross/remit",
+  "license": "Apache-2.0",
+  "keywords": ["cloud", "aws", "authorization", "audit", "mcp", "agents"],
+  "userConfig": {
+    "chain": {
+      "type": "file",
+      "title": "Warrant chain",
+      "description": "The warrant chain the agent works under (remit warrant issue or delegate).",
+      "required": true
+    },
+    "root": {
+      "type": "string",
+      "title": "Trusted root key",
+      "description": "The key identifier the chain must start at, for example ed25519:... (remit key id).",
+      "required": true
+    },
+    "role": {
+      "type": "string",
+      "title": "Role ARN",
+      "description": "The role the broker assumes; its trust policy must require a Remit warrant id as source identity.",
+      "required": true
+    },
+    "log_policy": {
+      "type": "file",
+      "title": "Log trust policy",
+      "description": "The trust policy the chain's log checkpoint must satisfy (SPEC 9.2).",
+      "required": true
+    },
+    "log_proof": {
+      "type": "file",
+      "title": "Logged proof",
+      "description": "The proof that every link of the chain is logged (remit log prove).",
+      "required": true
+    },
+    "region": {
+      "type": "string",
+      "title": "Region",
+      "description": "The region for STS and for commands.",
+      "default": "us-east-1"
+    },
+    "allow": {
+      "type": "string",
+      "title": "Program remit_run may start",
+      "description": "The one program remit_run may start, by name.",
+      "default": "aws"
+    }
+  },
+  "mcpServers": {
+    "remit": {
+      "command": "remit",
+      "args": [
+        "mcp",
+        "--chain", "${user_config.chain}",
+        "--root", "${user_config.root}",
+        "--role", "${user_config.role}",
+        "--log-policy", "${user_config.log_policy}",
+        "--log-proof", "${user_config.log_proof}",
+        "--region", "${user_config.region}",
+        "--allow", "${user_config.allow}"
+      ]
+    }
+  }
+}

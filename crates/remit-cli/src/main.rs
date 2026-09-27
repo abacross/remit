@@ -14,6 +14,7 @@ use std::process::{Command, ExitCode};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 mod approve;
+mod hook;
 mod log;
 mod mcp;
 mod trail;
@@ -60,6 +61,9 @@ enum Top {
     Witness(WitnessCmd),
     /// Serve the Model Context Protocol over stdio: warrant, check and run tools (ADR 0009).
     Mcp(mcp::McpArgs),
+    /// Agent-framework hooks: the plugin's guide rail against direct cloud CLIs (ADR 0009).
+    #[command(subcommand)]
+    Hook(HookCmd),
     /// Verify a signed reconciliation report offline.
     VerifyReport {
         /// The report.
@@ -72,6 +76,13 @@ enum Top {
         #[arg(long)]
         key_id: String,
     },
+}
+
+#[derive(Subcommand)]
+enum HookCmd {
+    /// A Claude Code `PreToolUse` event on stdin; denies a shell command that starts a cloud
+    /// CLI directly, so the agent uses `remit_run`.
+    PreToolUse,
 }
 
 #[derive(Args)]
@@ -875,6 +886,7 @@ async fn main() -> ExitCode {
         }
         Top::Approve(a) => approve::command(&a),
         Top::Mcp(a) => mcp::serve(a).await.map(|()| ExitCode::SUCCESS),
+        Top::Hook(HookCmd::PreToolUse) => hook::pre_tool_use().map(|()| ExitCode::SUCCESS),
         Top::Reference(ReferenceCmd::Fetch { out, services }) => {
             approve::fetch_reference(&out, &services).map(|()| ExitCode::SUCCESS)
         }
@@ -890,5 +902,78 @@ async fn main() -> ExitCode {
             eprintln!("remit: {message}");
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod plugin_tests {
+    //! The agent plugin (`integrations/claude-plugin/`) launches this binary; these keep its
+    //! command lines and this CLI from drifting apart.
+
+    use super::{Cli, HookCmd, Top};
+    use clap::Parser;
+    use serde_json::Value;
+
+    fn plugin_file(rel: &str) -> Value {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../integrations/claude-plugin")
+            .join(rel);
+        let text =
+            std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        serde_json::from_str(&text).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+    }
+
+    fn argv(command: &Value, args: &Value) -> Vec<String> {
+        let mut out = vec![command.as_str().unwrap_or_default().to_owned()];
+        out.extend(
+            args.as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .map(str::to_owned),
+        );
+        out
+    }
+
+    #[test]
+    fn the_plugins_mcp_server_line_is_a_valid_remit_mcp_invocation() {
+        let manifest = plugin_file(".claude-plugin/plugin.json");
+        let server = &manifest["mcpServers"]["remit"];
+        let line = argv(&server["command"], &server["args"]);
+        assert_eq!(line.first().map(String::as_str), Some("remit"));
+        let parsed = Cli::try_parse_from(&line).unwrap_or_else(|e| panic!("{e}"));
+        assert!(matches!(parsed.command, Top::Mcp(_)));
+        // Every ${user_config.KEY} the server line uses is declared, and every required
+        // option is used.
+        let config = manifest["userConfig"]
+            .as_object()
+            .cloned()
+            .unwrap_or_default();
+        for word in &line {
+            if let Some(key) = word
+                .strip_prefix("${user_config.")
+                .and_then(|w| w.strip_suffix('}'))
+            {
+                assert!(config.contains_key(key), "undeclared option {key}");
+            }
+        }
+        for (key, spec) in &config {
+            if spec["required"] == true {
+                assert!(
+                    line.contains(&format!("${{user_config.{key}}}")),
+                    "required option {key} is never used"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_plugins_hook_line_is_a_valid_remit_hook_invocation() {
+        let hooks = plugin_file("hooks/hooks.json");
+        let handler = &hooks["hooks"]["PreToolUse"][0]["hooks"][0];
+        assert_eq!(hooks["hooks"]["PreToolUse"][0]["matcher"], "Bash");
+        let line = argv(&handler["command"], &handler["args"]);
+        let parsed = Cli::try_parse_from(&line).unwrap_or_else(|e| panic!("{e}"));
+        assert!(matches!(parsed.command, Top::Hook(HookCmd::PreToolUse)));
     }
 }
