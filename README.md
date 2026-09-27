@@ -7,6 +7,10 @@ Tokens answer the first question and policies the second.
 Tamper-evident logs prove a record has not changed, but not that it is complete: an action that was never recorded is invisible to every integrity check.
 Remit's claim is all three together, with the third established against the cloud provider's own record rather than the agent's.
 
+[![Is the log all of it? A three-minute film about Remit](docs/media/film-is-the-log-all-of-it.jpg)](https://www.youtube.com/watch?v=-iTTxophP2Y)
+
+**Watch: [Is the log all of it?](https://www.youtube.com/watch?v=-iTTxophP2Y)** (3:02), the idea and the first real runs in three minutes. More films on [YouTube](https://www.youtube.com/channel/UC9qJk2BOs_gy2dnv0jFF1nQ).
+
 ## How it works
 
 1. **Warrants.** A human issues a warrant: which agent, which actions on which resources, for how long, and why. An agent can delegate part of its warrant, and a delegation can only narrow.
