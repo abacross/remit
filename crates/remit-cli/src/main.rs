@@ -15,6 +15,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 mod approve;
 mod log;
+mod mcp;
 mod trail;
 
 use clap::{Args, Parser, Subcommand};
@@ -57,6 +58,8 @@ enum Top {
     /// Run a witness (tlog-witness over HTTP) that cosigns only consistent checkpoints.
     #[command(subcommand)]
     Witness(WitnessCmd),
+    /// Serve the Model Context Protocol over stdio: warrant, check and run tools (ADR 0009).
+    Mcp(mcp::McpArgs),
     /// Verify a signed reconciliation report offline.
     VerifyReport {
         /// The report.
@@ -379,17 +382,39 @@ const CLOSED: &[&str] = &[
     "AWS_CREDENTIAL_EXPIRATION",
 ];
 
-async fn run(args: RunArgs) -> Result<ExitCode> {
-    let chain = read_chain(&args.chain)?;
-    let plan = remit_broker::plan(&chain, &roots(&args.roots)?, now(), args.role_max_seconds)
+/// What `remit run` and the MCP server's `remit_run` both need before a command may start.
+pub(crate) struct SessionArgs<'a> {
+    pub chain: &'a Path,
+    pub roots: &'a [String],
+    pub role: &'a str,
+    pub role_max_seconds: u64,
+    pub log_policy: &'a Path,
+    pub log_proof: &'a Path,
+    pub region: Option<&'a str>,
+}
+
+/// A verified, logged session: the leaf warrant's plan, its STS credentials, the region.
+pub(crate) struct Session {
+    pub plan: remit_broker::SessionPlan,
+    pub creds: remit_broker::SessionCredentials,
+    pub region: String,
+    pub logged_origin: String,
+    pub logged_size: u64,
+}
+
+/// Verifies the chain, that every link is proven logged (SPEC 9.3), and obtains an STS
+/// session stamped with the leaf warrant's identifier (SPEC 8.1). Nothing reaches AWS
+/// unless the chain verifies and is logged.
+pub(crate) async fn open_session(a: &SessionArgs<'_>) -> Result<Session> {
+    let chain = read_chain(a.chain)?;
+    let plan = remit_broker::plan(&chain, &roots(a.roots)?, now(), a.role_max_seconds)
         .map_err(|e| format!("refused: {e}"))?;
-    // Logged before used (SPEC 9.3): checked before anything reaches AWS.
-    let logged = log::verify_logged(&args.log_policy, &args.chain, &args.log_proof)
+    let logged = log::verify_logged(a.log_policy, a.chain, a.log_proof)
         .map_err(|e| format!("refused: {e}"))?;
     // A machine with no configured region is common; STS still needs one, and the command
     // should run in the same one (found on the first live session, 2026-09-24).
     let chain_of_regions = aws_config::meta::region::RegionProviderChain::first_try(
-        args.region.clone().map(aws_config::Region::new),
+        a.region.map(|r| aws_config::Region::new(r.to_owned())),
     )
     .or_default_provider()
     .or_else(aws_config::Region::from_static("us-east-1"));
@@ -401,16 +426,52 @@ async fn run(args: RunArgs) -> Result<ExitCode> {
         .region()
         .map_or_else(|| "us-east-1".to_owned(), ToString::to_string);
     let sts = aws_sdk_sts::Client::new(&config);
-    let creds = remit_broker::assume(&sts, &args.role, &plan)
+    let creds = remit_broker::assume(&sts, a.role, &plan)
         .await
         .map_err(|e| e.to_string())?;
+    Ok(Session {
+        plan,
+        creds,
+        region,
+        logged_origin: logged.checkpoint.origin().to_owned(),
+        logged_size: logged.checkpoint.size(),
+    })
+}
+
+/// The child's environment: every other credential source closed (`CLOSED` removed, the
+/// shared files pointed at nothing), and only the session's credentials set.
+pub(crate) fn session_env(s: &Session) -> Vec<(&'static str, String)> {
+    vec![
+        // The shared files hold the broker's own credentials; the child sees none of them.
+        ("AWS_SHARED_CREDENTIALS_FILE", "/dev/null".to_owned()),
+        ("AWS_CONFIG_FILE", "/dev/null".to_owned()),
+        ("AWS_EC2_METADATA_DISABLED", "true".to_owned()),
+        ("AWS_ACCESS_KEY_ID", s.creds.access_key_id.clone()),
+        ("AWS_SECRET_ACCESS_KEY", s.creds.secret_access_key.clone()),
+        ("AWS_SESSION_TOKEN", s.creds.session_token.clone()),
+        ("AWS_REGION", s.region.clone()),
+        ("REMIT_WARRANT_ID", s.plan.warrant_id.as_str().to_owned()),
+    ]
+}
+
+async fn run(args: RunArgs) -> Result<ExitCode> {
+    let session = open_session(&SessionArgs {
+        chain: &args.chain,
+        roots: &args.roots,
+        role: &args.role,
+        role_max_seconds: args.role_max_seconds,
+        log_policy: &args.log_policy,
+        log_proof: &args.log_proof,
+        region: args.region.as_deref(),
+    })
+    .await?;
     eprintln!(
         "remit: warrant {} for {}, {} s; logged in {} at size {}",
-        plan.warrant_id,
-        plan.subject,
-        plan.duration_seconds,
-        logged.checkpoint.origin(),
-        logged.checkpoint.size()
+        session.plan.warrant_id,
+        session.plan.subject,
+        session.plan.duration_seconds,
+        session.logged_origin,
+        session.logged_size
     );
 
     let (program, rest) = args.command.split_first().ok_or("no command")?;
@@ -419,15 +480,7 @@ async fn run(args: RunArgs) -> Result<ExitCode> {
     for var in CLOSED {
         cmd.env_remove(var);
     }
-    // The shared files hold the broker's own credentials; the child sees none of them.
-    cmd.env("AWS_SHARED_CREDENTIALS_FILE", "/dev/null")
-        .env("AWS_CONFIG_FILE", "/dev/null")
-        .env("AWS_EC2_METADATA_DISABLED", "true")
-        .env("AWS_ACCESS_KEY_ID", &creds.access_key_id)
-        .env("AWS_SECRET_ACCESS_KEY", &creds.secret_access_key)
-        .env("AWS_SESSION_TOKEN", &creds.session_token)
-        .env("AWS_REGION", &region)
-        .env("REMIT_WARRANT_ID", plan.warrant_id.as_str());
+    cmd.envs(session_env(&session));
     let status = cmd.status().map_err(|e| format!("{program}: {e}"))?;
     Ok(status
         .code()
@@ -821,6 +874,7 @@ async fn main() -> ExitCode {
             log::serve_witness(a).await.map(|()| ExitCode::SUCCESS)
         }
         Top::Approve(a) => approve::command(&a),
+        Top::Mcp(a) => mcp::serve(a).await.map(|()| ExitCode::SUCCESS),
         Top::Reference(ReferenceCmd::Fetch { out, services }) => {
             approve::fetch_reference(&out, &services).map(|()| ExitCode::SUCCESS)
         }
