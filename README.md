@@ -9,7 +9,7 @@ Remit's claim is all three together, with the third established against the clou
 
 [![Is the log all of it? A three-minute film about Remit](docs/media/film-is-the-log-all-of-it.jpg)](https://www.youtube.com/watch?v=-iTTxophP2Y)
 
-**Watch: [Is the log all of it?](https://www.youtube.com/watch?v=-iTTxophP2Y)** (3:02), the idea and the first real runs in three minutes. More films on [YouTube](https://www.youtube.com/channel/UC9qJk2BOs_gy2dnv0jFF1nQ).
+**Watch: [Is the log all of it?](https://www.youtube.com/watch?v=-iTTxophP2Y)** (3:02), the idea and the first real runs in three minutes, and [How warrants work](https://www.youtube.com/watch?v=fv_TyofPCtc) (2:25), how the cloud itself refuses an agent and every way to try to get around it. More films on [YouTube](https://www.youtube.com/channel/UC9qJk2BOs_gy2dnv0jFF1nQ).
 
 **Try it:** [Getting started](docs/GETTING-STARTED.md): five minutes without AWS, then `remit init` and `remit task` for your own project, and how warrants fit a development workflow.
 
