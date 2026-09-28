@@ -180,3 +180,25 @@ fn a_task_needs_a_project_a_purpose_and_a_real_duration() {
     assert!(!zero.status.success());
     assert!(!s.project().join(".remit/current.chain").exists());
 }
+
+#[test]
+fn a_reader_that_leaves_gets_no_panic() {
+    // `remit warrant show ... | head -1`: the reader closes the pipe before remit has
+    // written everything. Closing it before the child starts writing makes that certain.
+    use std::process::Stdio;
+    let scratch = Scratch::new("pipe");
+    let key = scratch.0.join("k.key");
+    let made = scratch.remit(&["key", "new", "--out", key.to_str().unwrap()]);
+    assert!(made.status.success());
+    let mut child = Command::new(env!("CARGO_BIN_EXE_remit"))
+        .args(["key", "id", "--key", key.to_str().unwrap()])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    drop(child.stdout.take());
+    let out = child.wait_with_output().unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!stderr.contains("panicked"), "{stderr}");
+    assert_eq!(out.status.code(), Some(141), "{stderr}");
+}

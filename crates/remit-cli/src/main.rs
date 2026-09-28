@@ -884,8 +884,28 @@ fn warrant(cmd: WarrantCmd) -> Result<()> {
     Ok(())
 }
 
+/// A reader that stops early (`remit warrant show | head -1`) closes the pipe, and Rust's
+/// `println!` then panics. Exit the way a Unix tool killed by SIGPIPE does, status 141,
+/// silently, instead of printing a panic. Any other panic is reported as before.
+fn quiet_when_the_reader_leaves() {
+    let report = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let payload = info.payload();
+        let message = payload
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| payload.downcast_ref::<&str>().copied())
+            .unwrap_or("");
+        if message.starts_with("failed printing to std") && message.contains("Broken pipe") {
+            std::process::exit(141);
+        }
+        report(info);
+    }));
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ExitCode {
+    quiet_when_the_reader_leaves();
     let outcome = match Cli::parse().command {
         Top::Init(a) => project::init(&a).map(|()| ExitCode::SUCCESS),
         Top::Task(a) => project::task(a).map(|()| ExitCode::SUCCESS),
