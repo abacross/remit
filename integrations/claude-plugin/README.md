@@ -8,9 +8,9 @@ Your agent reaches the cloud only through a warrant a person signed (ADR 0009).
 
 ## Before you install
 
-1. `remit` on your `PATH`: `cargo install --path crates/remit-cli` from this repository.
+1. `remit` on your `PATH`, and `remit init` and `remit task` for the rest of this list (docs/GETTING-STARTED.md).
 2. A warrant chain for the agent, signed by a key you trust (`remit warrant issue`), logged and proven (`remit log append`, `remit log prove`) under a trust policy.
-3. The role the broker assumes, whose trust policy requires a Remit warrant id as the session's source identity (`deploy/aws/role.yaml`), and credentials for the broker itself in the environment `remit` runs in. The agent never sees them.
+3. The role the broker assumes, whose trust policy requires a Remit warrant id as the session's source identity (`deploy/aws/role.yaml`), and credentials for the broker itself in the environment `remit` runs in. Keep them out of the agent's reach where you can: an agent that can read them can open sessions itself, which the reconciler reports but cannot prevent (THREAT-MODEL, known gap 3).
 
 ## Install
 
