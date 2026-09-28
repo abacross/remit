@@ -141,6 +141,51 @@ pub(crate) struct WitnessArgs {
     witness_urls: Vec<String>,
 }
 
+impl LogKeyArgs {
+    /// The arguments `remit log` would take, for commands that drive a log themselves.
+    pub(crate) fn new(dir: PathBuf, key: PathBuf, origin: String) -> Self {
+        Self { dir, key, origin }
+    }
+}
+
+impl WitnessArgs {
+    /// A single local Ed25519 witness, and no remote ones.
+    pub(crate) fn local(key: PathBuf, name: String, state: PathBuf) -> Self {
+        Self {
+            witness_key: Some(key),
+            witness_name: Some(name),
+            witness_algorithm: Alg::Ed25519,
+            witness_state: Some(state),
+            witness_urls: Vec::new(),
+        }
+    }
+}
+
+/// Creates an empty log.
+pub(crate) fn create(dir: &Path, key: &Path, origin: &str) -> Result<()> {
+    Log::create(dir, signer(key, origin, KeyKind::Log)?)
+        .map(drop)
+        .map_err(|e| e.to_string())
+}
+
+/// `remit log append` for one chain.
+pub(crate) fn append_chain(log: LogKeyArgs, chain: PathBuf, witness: WitnessArgs) -> Result<()> {
+    command(LogCmd::Append {
+        log,
+        chain,
+        witness,
+    })
+}
+
+/// A verifier key (vkey) line for a trust policy.
+pub(crate) fn vkey(key: &Path, name: &str, kind: Kind) -> Result<String> {
+    let s = match kind {
+        Kind::Log => signer(key, name, KeyKind::Log)?,
+        Kind::Witness => witness_signer(key, name, Alg::Ed25519)?,
+    };
+    Ok(s.verifier_key().to_vkey())
+}
+
 fn signer(path: &Path, name: &str, kind: KeyKind) -> Result<NoteSigner> {
     NoteSigner::from_seed(name, kind, &read_seed_bytes(path)?).map_err(|e| e.to_string())
 }
@@ -321,7 +366,7 @@ pub(crate) fn command(cmd: LogCmd) -> Result<()> {
 
 /// `remit log prove`: the proof that every link of a chain is logged, written only if it
 /// satisfies the policy it is proven under.
-fn prove(dir: &Path, policy: &Path, chain: &Path, out: &Path) -> Result<()> {
+pub(crate) fn prove(dir: &Path, policy: &Path, chain: &Path, out: &Path) -> Result<()> {
     let policy = read_policy(policy)?;
     let links = read_chain(chain)?;
     let d = LogDir::new(dir);

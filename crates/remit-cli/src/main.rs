@@ -17,6 +17,7 @@ mod approve;
 mod hook;
 mod log;
 mod mcp;
+mod project;
 mod trail;
 
 use clap::{Args, Parser, Subcommand};
@@ -38,6 +39,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Top {
+    /// Set Remit up for this project: keys, a witnessed log and its trust policy, and the
+    /// AWS role template (docs/GETTING-STARTED.md).
+    Init(project::InitArgs),
+    /// Issue a warrant for one task, log it, prove it, and make it the agent's current one.
+    Task(project::TaskArgs),
     /// Signing keys.
     #[command(subcommand)]
     Key(KeyCmd),
@@ -796,18 +802,22 @@ fn verify_report(report: &Path, signature: &Path, key_id: &str) -> Result<()> {
     Ok(())
 }
 
+/// A key from the operating system's secure random source, written as a new file (never
+/// over an existing one).
+fn new_key(out: &Path) -> Result<IssuerKey> {
+    let mut seed = [0u8; 32];
+    getrandom::fill(&mut seed).map_err(|e| format!("random source: {e}"))?;
+    let hex = seed.iter().fold(String::with_capacity(65), |mut s, b| {
+        let _ = write!(s, "{b:02x}");
+        s
+    });
+    write_new(out, format!("{hex}\n").as_bytes())?;
+    Ok(IssuerKey::from_seed(&seed))
+}
+
 fn key(cmd: KeyCmd) -> Result<()> {
     match cmd {
-        KeyCmd::New { out } => {
-            let mut seed = [0u8; 32];
-            getrandom::fill(&mut seed).map_err(|e| format!("random source: {e}"))?;
-            let hex = seed.iter().fold(String::with_capacity(65), |mut s, b| {
-                let _ = write!(s, "{b:02x}");
-                s
-            });
-            write_new(&out, format!("{hex}\n").as_bytes())?;
-            println!("{}", IssuerKey::from_seed(&seed).id());
-        }
+        KeyCmd::New { out } => println!("{}", new_key(&out)?.id()),
         KeyCmd::Id { key } => println!("{}", read_seed(&key)?.id()),
     }
     Ok(())
@@ -876,6 +886,8 @@ fn warrant(cmd: WarrantCmd) -> Result<()> {
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ExitCode {
     let outcome = match Cli::parse().command {
+        Top::Init(a) => project::init(&a).map(|()| ExitCode::SUCCESS),
+        Top::Task(a) => project::task(a).map(|()| ExitCode::SUCCESS),
         Top::Key(k) => key(k).map(|()| ExitCode::SUCCESS),
         Top::Warrant(w) => warrant(w).map(|()| ExitCode::SUCCESS),
         Top::Run(r) => run(r).await,
