@@ -415,7 +415,18 @@ Results are served beside them at `result/<hex SHA-256>`.
 Tiles and results never change once written; only `checkpoint` does.
 Files whose names begin with a dot (the writer's lock, files being written) belong to the writer and are never served.
 
-### 9.6 What the log does not claim
+### 9.6 Anchors
+
+Witnesses show there is one history; they do not show when it was written, since their clocks are their own.
+An anchor does: an authority outside the log attests that a checkpoint existed by a given time.
+
+1. The **anchored digest** of a checkpoint is the SHA-256 of its body, the signed text without its signature lines, so later cosignatures do not change it.
+2. `remit log anchor` gives the digest, in lowercase hex, to one or more **submitters**: programs that obtain a token from an authority, write it under the log's `anchors/` directory, and print a JSON receipt naming its `kind` and the token's path relative to `anchors/`. A receipt naming a path outside `anchors/`, or a file that is not there, is refused and not recorded. Remit ships two: an RFC 3161 timestamp authority (the token is a signed timestamp over the digest) and OpenTimestamps (a proof committing the digest's hex text to Bitcoin, pending until a block confirms it and the proof is upgraded).
+3. The log keeps the anchored checkpoint as `anchors/<digest>.checkpoint`, the note as it was when anchored, and its receipts as `anchors/<digest>.json`, each with the digest, the size, the time it was recorded and the submitter's name. A submitter already recorded for a checkpoint is not run for it again.
+4. `remit log verify-anchors` checks, for every kept checkpoint: that it hashes to its name; that the log's key signed it for the log's origin; that the log now is consistent with it (RFC 9162 section 2.1.4); that its receipts' tokens exist; and, for an RFC 3161 token, that the digest it covers, as openssl reads it, is this checkpoint's. A kept checkpoint with no receipt is a failure. Whether an authority's signature and certificate chain are valid, and whether an OpenTimestamps proof is confirmed in Bitcoin, are checked with that authority's own tools (`openssl ts -verify`, `ots verify`).
+5. An anchor adds no trust to the log's contents: it bounds when a checkpoint existed, so a history cannot be rewritten and backdated past an anchor without the rewrite being inconsistent with the anchored checkpoint.
+
+### 9.7 What the log does not claim
 
 - It does not stop a thief with an issuer key from logging and using a warrant. It makes that warrant public, and the reconciler reports every event under it.
 - It does not choose witnesses for the verifier. A verifier that trusts witnesses the log's operator controls has no split-view defence.

@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+mod anchor;
 mod approve;
 mod hook;
 mod log;

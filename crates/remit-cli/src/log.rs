@@ -91,6 +91,26 @@ pub(crate) enum LogCmd {
         #[arg(long)]
         out: PathBuf,
     },
+    /// Submit the current checkpoint's digest to authorities outside the log that timestamp
+    /// it (SPEC 9.6). A submitter already recorded for this checkpoint is not run again.
+    Anchor {
+        /// The log directory.
+        #[arg(long)]
+        dir: PathBuf,
+        /// A submitter program (`scripts/anchors/`); repeat for more authorities.
+        #[arg(long = "submit", required = true)]
+        submitters: Vec<PathBuf>,
+    },
+    /// Check every anchored checkpoint: signed by the log, consistent with the log now,
+    /// and backed by the tokens its receipts name.
+    VerifyAnchors {
+        /// The log directory.
+        #[arg(long)]
+        dir: PathBuf,
+        /// The trust policy naming the log's key.
+        #[arg(long)]
+        policy: PathBuf,
+    },
     /// Verify a proof offline, as the broker does before issuing a session.
     Verify {
         /// The trust policy.
@@ -347,6 +367,10 @@ pub(crate) fn command(cmd: LogCmd) -> Result<()> {
             chain,
             out,
         } => prove(&dir, &policy, &chain, &out)?,
+        LogCmd::Anchor { dir, submitters } => crate::anchor::anchor(&dir, &submitters)?,
+        LogCmd::VerifyAnchors { dir, policy } => {
+            crate::anchor::verify_anchors(&dir, &read_policy(&policy)?)?;
+        }
         LogCmd::Verify {
             policy,
             chain,

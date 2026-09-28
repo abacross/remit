@@ -31,6 +31,7 @@ aws-sdk-cloudtrail = "1.123.0"
 aws-sdk-iam = "1.126.0"
 remit-reconcile = { version = "0.1.0", path = "../remit-reconcile" }
 serde_json = "1.0.151"
+sha2 = "0.11.0"
 remit-aws = { version = "0.1.0", path = "../remit-aws" }
 ureq = "3.4.2"
 flate2 = "1.1.10"

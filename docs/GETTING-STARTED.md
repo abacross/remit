@@ -165,6 +165,7 @@ A `complete` verdict is exactly as strong as these, and the report restates the 
 - **Only the broker can make managed sessions.** The role's trust policy admits only the broker (the reconciler checks this on every run), and the broker's credentials are out of the agent's reach.
 - **Only people sign warrants.** The issuing key is out of the agent's reach.
 - **The log has independent witnesses.** The local witness `remit init` sets up shows the mechanism and protects against nothing its operator might do; add witnesses the verifier trusts (`remit log append --witness-url`).
+- **The log is anchored in time.** `remit log anchor --dir .remit/log --submit scripts/anchors/rfc3161.sh --submit scripts/anchors/opentimestamps.sh`, hourly or after each task, and `remit log verify-anchors` to check; without anchors, when the log was written rests on its witnesses' clocks.
 - **Nobody else is quietly acting.** Identities Remit does not manage are counted in every report, not judged; an administrator with standing access is outside the claim.
 
 The full list of assumptions and known gaps is in [THREAT-MODEL.md](THREAT-MODEL.md).
