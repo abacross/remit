@@ -1,0 +1,22 @@
+# Known vulnerabilities in any dependency (the RustSec advisory database), on every push
+# and pull request and every Monday, so a new advisory against a dependency that has not
+# changed is still found. The first run of this check, locally on 2026-09-28, found four
+# in a legacy TLS client the AWS SDK enabled by default; the fix was to switch it off.
+name: audit
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "0 7 * * 1"
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup show active-toolchain || rustup toolchain install
+      - run: cargo install --locked cargo-audit@0.22.2
+      - run: cargo audit --deny warnings

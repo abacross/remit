@@ -15,4 +15,4 @@ workspace = true
 remit-core = { path = "../remit-core" }
 remit-aws = { path = "../remit-aws" }
 aws-config = "1.12.0"
-aws-sdk-sts = "1.117.0"
+aws-sdk-sts = { version = "1.117.0", default-features = false, features = ["sigv4a", "default-https-client", "rt-tokio"] }
