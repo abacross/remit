@@ -91,6 +91,29 @@ pub(crate) enum LogCmd {
         #[arg(long)]
         out: PathBuf,
     },
+    /// Append a record (any file, such as an operations journal's record) by its hash,
+    /// keeping its bytes beside the log under `record/` (SPEC 9.1); then cosign.
+    AppendRecord {
+        #[command(flatten)]
+        log: LogKeyArgs,
+        /// The record's file; its exact bytes are what the entry commits to.
+        #[arg(long)]
+        record: PathBuf,
+        #[command(flatten)]
+        witness: WitnessArgs,
+    },
+    /// Check that a record is in the log, under a checkpoint the policy trusts.
+    VerifyRecord {
+        /// The log directory.
+        #[arg(long)]
+        dir: PathBuf,
+        /// The trust policy.
+        #[arg(long)]
+        policy: PathBuf,
+        /// The record's file.
+        #[arg(long)]
+        record: PathBuf,
+    },
     /// Submit the current checkpoint's digest to authorities outside the log that timestamp
     /// it (SPEC 9.6). A submitter already recorded for this checkpoint is not run again.
     Anchor {
@@ -367,6 +390,16 @@ pub(crate) fn command(cmd: LogCmd) -> Result<()> {
             chain,
             out,
         } => prove(&dir, &policy, &chain, &out)?,
+        LogCmd::AppendRecord {
+            log,
+            record,
+            witness,
+        } => append_record(&log, &record, &witness)?,
+        LogCmd::VerifyRecord {
+            dir,
+            policy,
+            record,
+        } => verify_record(&dir, &policy, &record)?,
         LogCmd::Anchor { dir, submitters } => crate::anchor::anchor(&dir, &submitters)?,
         LogCmd::VerifyAnchors { dir, policy } => {
             crate::anchor::verify_anchors(&dir, &read_policy(&policy)?)?;
@@ -418,6 +451,59 @@ pub(crate) fn prove(dir: &Path, policy: &Path, chain: &Path, out: &Path) -> Resu
         .map_err(|e| format!("not provable under this policy: {e}"))?;
     write_new(out, proof.encode().as_bytes())?;
     eprintln!("remit: {} links proven in a log of {size}", links.len());
+    Ok(())
+}
+
+/// `remit log append-record`: keeps the record's bytes, then appends its entry, once.
+fn append_record(log: &LogKeyArgs, record: &Path, witness: &WitnessArgs) -> Result<()> {
+    let mut l = open_log(log)?;
+    let bytes = std::fs::read(record).map_err(|e| format!("{}: {e}", record.display()))?;
+    let entry = Entry::record(&bytes);
+    let size = l.current().map_err(|e| e.to_string())?.size();
+    if l.dir()
+        .find(&entry, size)
+        .map_err(|e| e.to_string())?
+        .is_some()
+    {
+        println!("already logged");
+        return Ok(());
+    }
+    l.keep_record(&bytes).map_err(|e| e.to_string())?;
+    append(&mut l, &[entry], witness)
+}
+
+/// `remit log verify-record`: the record's entry is in the tree of a checkpoint the
+/// policy trusts, by an inclusion proof checked here, and the kept bytes are the record.
+fn verify_record(dir: &Path, policy: &Path, record: &Path) -> Result<()> {
+    let policy = read_policy(policy)?;
+    let bytes = std::fs::read(record).map_err(|e| format!("{}: {e}", record.display()))?;
+    let entry = Entry::record(&bytes);
+    let d = LogDir::new(dir);
+    let text = d.checkpoint_text().map_err(|e| e.to_string())?;
+    let trusted = remit_log::open(&text, &policy).map_err(|e| format!("checkpoint: {e}"))?;
+    let size = trusted.checkpoint.size();
+    let index = d
+        .find(&entry, size)
+        .map_err(|e| e.to_string())?
+        .ok_or("the record is not in the log")?;
+    let proof = d.inclusion_proof(index, size).map_err(|e| e.to_string())?;
+    remit_log::merkle::verify_inclusion(
+        index,
+        size,
+        &entry.leaf_hash(),
+        &proof,
+        trusted.checkpoint.root(),
+    )
+    .map_err(|e| format!("inclusion proof: {e}"))?;
+    let Entry::Record { digest } = &entry else {
+        return Err("not a record entry".into());
+    };
+    d.record(digest).map_err(|e| format!("kept bytes: {e}"))?;
+    println!(
+        "logged: entry {index} of {} at size {size}, cosigned by {} witness(es)",
+        trusted.checkpoint.origin(),
+        trusted.cosignatures.len()
+    );
     Ok(())
 }
 

@@ -57,6 +57,28 @@ fn a_warrant_entry_round_trips_and_nothing_else_decodes() {
 }
 
 #[test]
+fn a_record_entry_commits_to_exact_bytes_and_nothing_else_decodes() {
+    let record = br#"{"seq":1,"what":"deploy"}"#;
+    let entry = Entry::record(record);
+    let bytes = entry.encode();
+    assert_eq!(&bytes[..9], b"REMITLv1\x03");
+    assert_eq!(bytes.len(), 41);
+    assert_eq!(Entry::decode(&bytes).unwrap(), entry);
+    entry.check_record(record).unwrap();
+    assert!(entry.check_record(br#"{"seq":2,"what":"deploy"}"#).is_err());
+    let mut longer = bytes.clone();
+    longer.push(0);
+    assert!(Entry::decode(&longer).is_err());
+    assert!(Entry::decode(&bytes[..40]).is_err());
+    assert!(
+        Entry::warrant(signed(S3))
+            .unwrap()
+            .check_record(record)
+            .is_err()
+    );
+}
+
+#[test]
 fn a_warrant_too_large_to_log_is_refused() {
     let pattern = format!("arn:aws:s3:::{}", "a".repeat(2000));
     let patterns: Vec<&str> = vec![pattern.as_str()];

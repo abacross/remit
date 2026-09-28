@@ -215,7 +215,20 @@ impl LogDir {
     ///
     /// Missing, or not the bytes the digest names.
     pub fn result(&self, digest: &Hash) -> Result<Vec<u8>> {
-        let rel = result_path(digest);
+        self.hashed(&result_path(digest), digest)
+    }
+
+    /// A kept record's bytes, checked against their hash.
+    ///
+    /// # Errors
+    ///
+    /// The record is not there, or its bytes do not hash to `digest`.
+    pub fn record(&self, digest: &Hash) -> Result<Vec<u8>> {
+        self.hashed(&record_path(digest), digest)
+    }
+
+    fn hashed(&self, rel: &str, digest: &Hash) -> Result<Vec<u8>> {
+        let rel = rel.to_owned();
         let path = self.path(&rel);
         let bytes = fs::read(&path).map_err(io(&path))?;
         let actual: Hash = Sha256::digest(&bytes).into();
@@ -243,17 +256,26 @@ impl TileSource for LogDir {
     }
 }
 
-/// Where a result is published: `result/` and the lowercase hex of its SHA-256.
-#[must_use]
-pub fn result_path(digest: &Hash) -> String {
-    let hex: String = digest
+fn hex(digest: &Hash) -> String {
+    digest
         .iter()
         .flat_map(|b| {
             let [hi, lo] = [b >> 4, b & 0x0f];
             [hi, lo].map(|n| char::from_digit(u32::from(n), 16).unwrap_or('0'))
         })
-        .collect();
-    format!("result/{hex}")
+        .collect()
+}
+
+/// Where a result is published: `result/` and the lowercase hex of its SHA-256.
+#[must_use]
+pub fn result_path(digest: &Hash) -> String {
+    format!("result/{}", hex(digest))
+}
+
+/// Where a record is kept: `record/` and the lowercase hex of its SHA-256.
+#[must_use]
+pub fn record_path(digest: &Hash) -> String {
+    format!("record/{}", hex(digest))
 }
 
 /// Something that cosigns: a local witness, or a client of a remote one. It takes a
@@ -449,6 +471,20 @@ impl Log {
         Ok(digest)
     }
 
+    /// Keeps a record's bytes beside the log, before its entry is appended; idempotent.
+    ///
+    /// # Errors
+    ///
+    /// The file cannot be written.
+    pub fn keep_record(&self, bytes: &[u8]) -> Result<Hash> {
+        let digest: Hash = Sha256::digest(bytes).into();
+        let path = self.dir.path(&record_path(&digest));
+        if !path.exists() {
+            write_atomic(&path, bytes)?;
+        }
+        Ok(digest)
+    }
+
     /// Appends entries, commits the new checkpoint, then asks each cosigner to cosign it and
     /// republishes the checkpoint with the cosignatures it got. A result entry needs its
     /// result published first ([`Log::publish_result`]).
@@ -468,6 +504,11 @@ impl Log {
             if let Entry::Result { digest, .. } = e {
                 let bytes = self.dir.result(digest)?;
                 e.check_result(&bytes)
+                    .map_err(|err| StoreError::Refused(err.to_string()))?;
+            }
+            if let Entry::Record { digest } = e {
+                let bytes = self.dir.record(digest)?;
+                e.check_record(&bytes)
                     .map_err(|err| StoreError::Refused(err.to_string()))?;
             }
         }

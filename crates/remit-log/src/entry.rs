@@ -16,6 +16,7 @@ pub const MAX_ENTRY_BYTES: usize = 65_535;
 
 const KIND_WARRANT: u8 = 0x01;
 const KIND_RESULT: u8 = 0x02;
+const KIND_RECORD: u8 = 0x03;
 
 /// Why an entry was refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,6 +54,12 @@ pub enum Entry {
         key: KeyId,
         /// The result's signature (SPEC section 6.6).
         signature: [u8; 64],
+    },
+    /// Any other record an operator keeps, such as an operations journal's, by its hash;
+    /// the bytes are kept beside the log (SPEC section 9.1).
+    Record {
+        /// SHA-256 of the record's exact bytes.
+        digest: Hash,
     },
 }
 
@@ -106,6 +113,31 @@ impl Entry {
         verify_in_domain(key, RESULT_DOMAIN, bytes, signature).map_err(|_| EntryError::BadSignature)
     }
 
+    /// A record entry for these exact bytes.
+    #[must_use]
+    pub fn record(bytes: &[u8]) -> Self {
+        Self::Record {
+            digest: Sha256::digest(bytes).into(),
+        }
+    }
+
+    /// Checks that `bytes` are the record this entry commits to.
+    ///
+    /// # Errors
+    ///
+    /// Not a record entry, or other bytes.
+    pub fn check_record(&self, bytes: &[u8]) -> Result<(), EntryError> {
+        let Self::Record { digest } = self else {
+            return Err(EntryError::Malformed("not a record entry"));
+        };
+        let actual: Hash = Sha256::digest(bytes).into();
+        if actual == *digest {
+            Ok(())
+        } else {
+            Err(EntryError::Malformed("record bytes do not match the entry"))
+        }
+    }
+
     /// The entry's bytes.
     #[must_use]
     pub fn encode(&self) -> Vec<u8> {
@@ -124,6 +156,10 @@ impl Entry {
                 out.extend_from_slice(digest);
                 out.extend_from_slice(&key.public_key());
                 out.extend_from_slice(signature);
+            }
+            Self::Record { digest } => {
+                out.push(KIND_RECORD);
+                out.extend_from_slice(digest);
             }
         }
         out
@@ -163,6 +199,12 @@ impl Entry {
                     key,
                     signature,
                 })
+            }
+            Some((&KIND_RECORD, body)) => {
+                let digest: Hash = body
+                    .try_into()
+                    .map_err(|_| EntryError::Malformed("record entry is not 41 bytes"))?;
+                Ok(Self::Record { digest })
             }
             _ => Err(EntryError::Malformed("unknown kind")),
         }

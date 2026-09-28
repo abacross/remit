@@ -369,12 +369,13 @@ An entry is the 8 bytes `REMITLv1`, one kind byte, and a body:
 
 - kind `0x01`, **a warrant**: the body is one signed warrant in its transport form (section 5.5). Every link of a chain is its own entry.
 - kind `0x02`, **a result**: the body is the SHA-256 of a reconciliation result's exact bytes (32 bytes), the reconciler's Ed25519 public key (32 bytes), and the result's signature (64 bytes, section 6.6). The result itself is published beside the log under its hash; the entry fixes which result was signed, by which key, and in what order.
+- kind `0x03`, **a record**: the body is the SHA-256 of a record's exact bytes (32 bytes). A record is anything else an operator keeps in the same log, such as an operations journal's records or a tenant's attestations; the bytes are kept beside the log under their hash (section 9.5), and the entry fixes which record, in what order. Remit gives a record no meaning of its own: whoever reads the log reads the record.
 
 An entry is at most 65,535 bytes, the most a tile's entry bundle can carry (tlog-tiles prefixes each entry with a 16-bit length).
 A signed warrant whose transport form is longer than 65,526 bytes therefore cannot be logged, and by section 9.3 cannot be used.
 A warrant small enough to compile to an AWS session policy (at most 2,048 characters, section 8.2) is far below this.
 
-The log appends only entries whose signatures verify: a warrant entry by section 5.2, a result entry against the result's bytes, which the appender supplies.
+The log appends only entries whose signatures verify, a warrant entry by section 5.2 and a result entry against the result's bytes, and a record entry only when the record's bytes are kept beside the log; the appender supplies both kinds of bytes.
 An entry's leaf hash is `SHA-256(0x00 || entry)` (RFC 9162 section 2.1.1).
 
 ### 9.2 Checkpoints and witnesses
@@ -411,7 +412,7 @@ Every signed result is appended to the log as a result entry, with its bytes pub
 ### 9.5 Serving
 
 The log is served as tlog-tiles static files: `checkpoint`, `tile/<L>/<N>` and `tile/entries/<N>`, each with the paths and partial-tile rules of that specification.
-Results are served beside them at `result/<hex SHA-256>`.
+Results are served beside them at `result/<hex SHA-256>`, and records at `record/<hex SHA-256>` when the operator publishes them; a log whose records are private serves the checkpoint and tiles without them, and anyone given a record can still prove it is in the log.
 Tiles and results never change once written; only `checkpoint` does.
 Files whose names begin with a dot (the writer's lock, files being written) belong to the writer and are never served.
 
