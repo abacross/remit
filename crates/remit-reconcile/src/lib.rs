@@ -170,6 +170,10 @@ pub struct Report {
     pub findings: Vec<Finding>,
     /// Managed actions per warrant identifier.
     pub actions_per_warrant: BTreeMap<String, u64>,
+    /// The same actions per warrant identifier, counted by action (`service:Name`), refused
+    /// ones included: what each warrant was used for. Resource names are left to the cloud
+    /// record, so that a published report discloses no more than its warrants do (SPEC 6.6).
+    pub actions_by_warrant: BTreeMap<String, BTreeMap<String, u64>>,
     /// Sessions created per warrant identifier.
     pub sessions_per_warrant: BTreeMap<String, u64>,
     /// Events by principals Remit does not manage, per principal: outside the claim, and
@@ -206,6 +210,7 @@ pub fn reconcile(input: &Input<'_>) -> Report {
     let managed: BTreeSet<&str> = input.roles.iter().map(|r| r.arn.as_str()).collect();
     let mut findings = Vec::new();
     let mut actions = BTreeMap::new();
+    let mut by_action = BTreeMap::new();
     let mut sessions = BTreeMap::new();
     let mut unmanaged = BTreeMap::new();
     let mut add = |kind, subject: &str, detail: String| {
@@ -237,7 +242,7 @@ pub fn reconcile(input: &Input<'_>) -> Report {
         if is_session_creation {
             check_session(e, &by_id, &mut sessions, &mut add);
         } else if is_managed_action {
-            check_action(e, &by_id, &mut actions, &mut add);
+            check_action(e, &by_id, &mut actions, &mut by_action, &mut add);
         } else {
             let who = e
                 .identity_arn
@@ -278,6 +283,7 @@ pub fn reconcile(input: &Input<'_>) -> Report {
         verdict,
         findings,
         actions_per_warrant: actions,
+        actions_by_warrant: by_action,
         sessions_per_warrant: sessions,
         unmanaged,
         events: u64::try_from(input.events.len()).unwrap_or(u64::MAX),
@@ -353,6 +359,7 @@ fn check_action(
     e: &Event,
     by_id: &BTreeMap<String, &Warrant>,
     actions: &mut BTreeMap<String, u64>,
+    by_action: &mut BTreeMap<String, BTreeMap<String, u64>>,
     add: &mut impl FnMut(Kind, &str, String),
 ) {
     let Some(si) = e.source_identity.as_deref() else {
@@ -364,6 +371,7 @@ fn check_action(
         return;
     };
     increment(actions, si);
+    increment(by_action.entry(si.to_owned()).or_default(), &e.action());
     let Some(w) = by_id.get(si) else {
         add(
             Kind::UnwarrantedEvent,

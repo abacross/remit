@@ -104,6 +104,13 @@ fn the_live_session_with_the_margin_reconciles_clean() {
     let id = warrant().id().as_str().to_owned();
     assert_eq!(r.sessions_per_warrant.get(&id), Some(&1));
     assert_eq!(r.actions_per_warrant.get(&id), Some(&1));
+    // What the warrant was used for, by action, with no resource names.
+    let used: Vec<(&str, u64)> = r.actions_by_warrant[&id]
+        .iter()
+        .map(|(a, n)| (a.as_str(), *n))
+        .collect();
+    assert_eq!(used, vec![("s3:GetBucketLocation", 1)]);
+    assert!(!r.to_json().unwrap().contains("arn:aws:s3:::abacross.com"));
     assert_eq!(
         r.unmanaged.get("arn:aws:iam::111122223333:user/admin"),
         Some(&1)

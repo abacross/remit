@@ -277,7 +277,8 @@ Any failure makes the verdict **incomplete**, with every finding listed.
 ### 6.6 The result
 
 A result is a JSON document written once and signed as written: the signature is over the exact bytes, and a verifier checks it before parsing.
-It states the window, the event source and its integrity evidence, the settling period, the regions covered, the inputs refused, the managed roles and whether each trust policy was as required, the verdict, every finding with its event identifier, the per-warrant event counts, and the unmanaged activity by principal.
+It states the window, the event source and its integrity evidence, the settling period, the regions covered, the inputs refused, the managed roles and whether each trust policy was as required, the verdict, every finding with its event identifier, the per-warrant event counts, in total and by action, and the unmanaged activity by principal.
+The counts by action say what each warrant was used for, refused attempts included, and never name a resource: resource names stay in the cloud record, so that a published result discloses no more than its warrants do.
 The reconciler signs with its own key, which is not a warrant issuer's key.
 
 The signature is Ed25519 over the 8 bytes `REMITRv1` followed by the result's exact bytes.
