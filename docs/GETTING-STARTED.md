@@ -29,11 +29,20 @@ You will see the agent's three tools, a permitted and a refused action with the 
 
 ### Install
 
+Download the binary for your platform from the [latest release](https://github.com/abacross/remit/releases/latest): static Linux builds for x86_64 and arm64, and macOS on Apple silicon.
+Each comes with a SHA-256 sum and a signed build provenance attestation, which proves it was built by this repository's release workflow from the tagged commit:
+
+```sh
+gh attestation verify remit-<version>-<target>.tar.gz --repo abacross/remit
+tar xzf remit-<version>-<target>.tar.gz
+```
+
+Put `remit` from the unpacked directory on your `PATH`.
+Or build it yourself with Rust:
+
 ```sh
 cargo install --locked --git https://github.com/abacross/remit remit-cli
 ```
-
-This puts `remit` on your `PATH`.
 
 ### Initialise
 
