@@ -1,0 +1,18 @@
+# The same checks as scripts/ci.sh on this machine, run in public on every push and
+# pull request, so anyone can see them pass. Actions are pinned by commit.
+name: ci
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # rust-toolchain.toml pins the exact toolchain; rustup installs it on first use.
+      - run: rustup show active-toolchain || rustup toolchain install
+      - run: bash scripts/ci.sh
