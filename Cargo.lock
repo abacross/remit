@@ -1823,7 +1823,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "remit-approver"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "proptest",
  "remit-core",
@@ -1833,7 +1833,7 @@ dependencies = [
 
 [[package]]
 name = "remit-aws"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "proptest",
  "remit-core",
@@ -1842,7 +1842,7 @@ dependencies = [
 
 [[package]]
 name = "remit-broker"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "aws-config",
  "aws-sdk-sts",
@@ -1852,7 +1852,7 @@ dependencies = [
 
 [[package]]
 name = "remit-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "aws-config",
  "aws-sdk-cloudtrail",
@@ -1876,7 +1876,7 @@ dependencies = [
 
 [[package]]
 name = "remit-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ed25519-dalek",
  "proptest",
@@ -1885,7 +1885,7 @@ dependencies = [
 
 [[package]]
 name = "remit-log"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "aws-lc-rs",
  "ed25519-dalek",
@@ -1897,7 +1897,7 @@ dependencies = [
 
 [[package]]
 name = "remit-logstore"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "remit-core",
  "remit-log",
@@ -1906,7 +1906,7 @@ dependencies = [
 
 [[package]]
 name = "remit-reconcile"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "remit-aws",
  "remit-core",
@@ -1918,7 +1918,7 @@ dependencies = [
 
 [[package]]
 name = "remit-witness"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "http-body-util",
  "hyper 1.11.1",

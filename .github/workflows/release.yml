@@ -13,8 +13,10 @@ jobs:
     strategy:
       matrix:
         include:
-          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu }
-          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu }
+          # Linux binaries are static (musl), so they run on any distribution: a glibc build
+          # from ubuntu-latest needed glibc 2.39 and failed on Ubuntu 22.04 (v0.1.0).
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-musl }
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-musl }
           - { os: macos-latest, target: aarch64-apple-darwin }
     runs-on: ${{ matrix.os }}
     steps:
@@ -22,12 +24,26 @@ jobs:
         with:
           persist-credentials: false
       - run: rustup show active-toolchain || rustup toolchain install
-      - run: cargo build --release --locked -p remit-cli
+      - run: rustup target add ${{ matrix.target }}
+      # Zig is the C compiler and linker for the static builds (aws-lc-sys has C code);
+      # both tools come pinned from PyPI into a venv.
+      - if: contains(matrix.target, 'musl')
+        run: |
+          python3 -m venv "$RUNNER_TEMP/zig"
+          "$RUNNER_TEMP/zig/bin/pip" install --quiet ziglang==0.16.0 cargo-zigbuild==0.23.4
+          echo "$RUNNER_TEMP/zig/bin" >> "$GITHUB_PATH"
+      - if: contains(matrix.target, 'musl')
+        run: cargo zigbuild --release --locked -p remit-cli --target ${{ matrix.target }}
+      - if: "!contains(matrix.target, 'musl')"
+        run: cargo build --release --locked -p remit-cli --target ${{ matrix.target }}
+      - if: contains(matrix.target, 'musl')
+        name: static
+        run: file target/${{ matrix.target }}/release/remit | tee /dev/stderr | grep -q 'statically linked'
       - name: package
         run: |
           name="remit-${GITHUB_REF_NAME}-${{ matrix.target }}"
           mkdir -p "dist/$name"
-          cp target/release/remit LICENSE NOTICE README.md "dist/$name/"
+          cp target/${{ matrix.target }}/release/remit LICENSE NOTICE README.md "dist/$name/"
           tar -C dist -czf "dist/$name.tar.gz" "$name"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
