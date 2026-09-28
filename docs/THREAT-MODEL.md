@@ -40,6 +40,13 @@ Remit's guarantees depend on these, and each result restates the ones it relied 
 - The provider's internal integrity beyond what it documents and signs.
 - Denial of service against the broker or the log, beyond failing closed: without the broker, an agent gets no credentials.
 
+## Known gaps
+
+Limits of the design as built, stated so that no one has to find them.
+
+1. **A resource-based policy can grant around a warrant.** The session policy bounds what the role's identity-based policy grants, but AWS: "A resource-based policy can specify the ARN of the session as a principal. In that case, the permissions from the resource-based policy are added after the session is created. The resource-based policy permissions are not limited by the session policy" (IAM user guide, policies and permissions, session policies). Someone able to write, for example, a bucket policy naming a warrant's session can let that session do more than its warrant permits. AWS does not refuse the action. When the cloud record covers it, the reconciler reports it as an outside-warrant event and the verdict is `incomplete`; a data event, such as reading an S3 object, is recorded only where data events are configured (SPEC section 6, assumption 2). Detected where recorded, never prevented.
+2. **A warrant cannot be revoked before it expires.** There is no revocation today: a logged warrant is honoured until its window ends, and credentials already issued stay valid until they expire, which is at most the role's maximum session (one hour in `deploy/aws/role.yaml`) and never later than 60 seconds before the warrant's window ends (SPEC section 8.1). Short windows are the mitigation until revocation exists.
+
 ## Failure principles
 
 - **Fail closed.** A warrant that cannot be verified, compiled within limits, or chained is refused. Nothing is granted by default.
