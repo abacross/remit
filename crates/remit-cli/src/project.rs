@@ -165,6 +165,12 @@ pub(crate) fn init(a: &InitArgs) -> Result<()> {
     println!("  the agent's key    {}", agent.id());
     println!("  the log            {origin}, with one local witness");
     println!();
+    println!("This setup is for trying Remit on one machine. Here the agent runs as you, so the");
+    println!("issuing key, the log and the broker's credentials are all within its reach: Remit's");
+    println!("checks guide it, but cannot bind an agent that tries to get around them. For real");
+    println!("use, run the broker as a service, reconcile elsewhere, and give the agent a system");
+    println!("of its own: docs/PRODUCTION.md.");
+    println!();
     println!("Next:");
     println!();
     // Claude Code reads a rule path with one leading slash as relative to the settings file;
