@@ -47,6 +47,8 @@ pub(crate) struct McpArgs {
     /// The region for STS and for commands.
     #[arg(long)]
     region: Option<String>,
+    #[command(flatten)]
+    service: crate::BrokerServiceArgs,
     /// Programs `remit_run` may start, by name found on `PATH` (for example `aws`) or by
     /// path; any, if none is given. Each is resolved once, when the server starts, to the
     /// file it names, and only those files are run.
@@ -377,9 +379,10 @@ impl Backend for Live {
             roots: &self.args.roots,
             role: &self.args.role,
             role_max_seconds: self.args.role_max_seconds,
-            log_policy: &self.args.log_policy,
+            log_policy: Some(&self.args.log_policy),
             log_proof: &self.args.log_proof,
             region: self.args.region.as_deref(),
+            service: &self.args.service,
         })
         .await?;
         let mut cmd = tokio::process::Command::new(&file);

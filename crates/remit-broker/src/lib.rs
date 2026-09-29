@@ -8,6 +8,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod service;
+
 use core::fmt;
 
 use remit_aws::{CompileError, compile_session_policy};
@@ -259,4 +261,39 @@ pub async fn assume(
         session_token: c.session_token().to_owned(),
         expires_at: c.expiration().secs(),
     })
+}
+
+/// Refuses to use AWS through anything but its own endpoints. The SDK takes an endpoint
+/// from `AWS_ENDPOINT_URL`, `AWS_ENDPOINT_URL_<SERVICE>` or the profile's `endpoint_url`,
+/// all of which whoever starts this process can set; the broker's `AssumeRole`, or the
+/// reconciler's reads of the record and the trust policies, would then go to a server of
+/// their choosing (found in the 2026-09-28 boundary review). The lookup is the one the
+/// SDK itself makes for each service, so what is refused is exactly what it would use.
+///
+/// # Errors
+///
+/// An endpoint override, global or for one of `services`, named with its URL.
+pub fn refuse_endpoint_overrides(
+    config: &aws_config::SdkConfig,
+    services: &[&str],
+) -> Result<(), String> {
+    if let Some(url) = config.endpoint_url() {
+        return Err(format!(
+            "refused: an endpoint override ({url}) would send AWS calls elsewhere"
+        ));
+    }
+    for service in services {
+        let key = aws_types::service_config::ServiceConfigKey::builder()
+            .service_id(service)
+            .env("AWS_ENDPOINT_URL")
+            .profile("endpoint_url")
+            .build()
+            .map_err(|e| e.to_string())?;
+        if let Some(url) = config.service_config().and_then(|c| c.load_config(key)) {
+            return Err(format!(
+                "refused: an endpoint override for {service} ({url}) would send its calls elsewhere"
+            ));
+        }
+    }
+    Ok(())
 }

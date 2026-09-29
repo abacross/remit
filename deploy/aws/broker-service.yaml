@@ -1,0 +1,136 @@
+# The Remit broker as a service (SPEC 8.4): an AWS Lambda function that holds its own trust
+# configuration and opens sessions only for a warrant's subject.
+#
+# Deployed by the people who issue warrants, never by an agent: what the broker trusts is
+# the parameters below, and a caller cannot change them. The agent's machine then holds no
+# broker key, only a key for the invoker user, which can do nothing but ask.
+#
+#   aws cloudformation deploy --stack-name remit-broker --template-file deploy/aws/broker-service.yaml \
+#     --capabilities CAPABILITY_NAMED_IAM --parameter-overrides \
+#       CodeBucket=<bucket> CodeKey=<key of remit-broker-lambda-<version>-arm64.zip> \
+#       TrustedRoots=<root key id,...> LogPolicyBase64=<base64 of the log's trust policy file> \
+#       ManagedRoleArns=<role arn,...>
+#
+# Then point each managed role's trust policy at the BrokerRoleArn output (deploy/aws/role.yaml,
+# BrokerPrincipalArn), give reconciliation `--broker <BrokerRoleArn>`, create an access key
+# for the invoker user, and delete the old broker user's key.
+#
+# The zip is a release asset, built and attested in public (`gh attestation verify <zip>
+# --repo abacross/remit`); copy it to CodeBucket after verifying it.
+#
+# Reverse: delete the stack; the roles' trust policies still name the old broker until
+# changed back.
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Remit broker service (SPEC 8.4)
+Parameters:
+  FunctionName:
+    Type: String
+    Default: remit-broker
+  CodeBucket:
+    Type: String
+    Description: The bucket holding the function's zip.
+  CodeKey:
+    Type: String
+    Description: The zip's key, a verified release asset.
+  TrustedRoots:
+    Type: String
+    Description: The root key identifiers a warrant chain must start at, separated by commas.
+    AllowedPattern: "ed25519:[a-z2-7]+(,ed25519:[a-z2-7]+)*"
+  LogPolicyBase64:
+    Type: String
+    Description: The log's trust policy file (log key, witnesses, quorum), base64. No chain is honoured unless proven logged under it.
+  ManagedRoleArns:
+    Type: CommaDelimitedList
+    Description: The roles this broker may assume; each role's trust policy must admit only this broker.
+  RoleMaxSeconds:
+    Type: Number
+    Default: 3600
+    MinValue: 900
+    MaxValue: 43200
+    Description: The managed roles' maximum session length.
+  LogRetentionDays:
+    Type: Number
+    Default: 365
+    Description: How long the broker's decisions are kept.
+Resources:
+  Decisions:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${FunctionName}
+      RetentionInDays: !Ref LogRetentionDays
+  BrokerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${FunctionName}-service
+      Description: The Remit broker service; the only principal the managed roles admit.
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: assume-managed-roles-with-a-warrant
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: ["sts:AssumeRole", "sts:SetSourceIdentity"]
+                Resource: !Ref ManagedRoleArns
+                Condition:
+                  StringLike:
+                    sts:SourceIdentity: "rw1-*"
+        - PolicyName: write-its-decisions
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: ["logs:CreateLogStream", "logs:PutLogEvents"]
+                Resource: !Sub "${Decisions.Arn}:*"
+      Tags:
+        - { Key: managed-by, Value: remit }
+  Broker:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Ref FunctionName
+      Description: Opens a session only for a logged warrant from a trusted root, asked for by its subject.
+      Runtime: provided.al2023
+      Architectures: [arm64]
+      Handler: bootstrap
+      MemorySize: 128
+      Timeout: 10
+      Role: !GetAtt BrokerRole.Arn
+      Code:
+        S3Bucket: !Ref CodeBucket
+        S3Key: !Ref CodeKey
+      Environment:
+        Variables:
+          REMIT_TRUSTED_ROOTS: !Ref TrustedRoots
+          REMIT_LOG_POLICY_BASE64: !Ref LogPolicyBase64
+          REMIT_ROLES: !Join [",", !Ref ManagedRoleArns]
+          REMIT_ROLE_MAX_SECONDS: !Ref RoleMaxSeconds
+      Tags:
+        - { Key: managed-by, Value: remit }
+  Invoker:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: !Sub ${FunctionName}-invoker
+      Policies:
+        - PolicyName: ask-the-broker-only
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !GetAtt Broker.Arn
+      Tags:
+        - { Key: managed-by, Value: remit }
+Outputs:
+  FunctionArn:
+    Value: !GetAtt Broker.Arn
+  BrokerRoleArn:
+    Description: The broker principal for the managed roles' trust policies and for `remit reconcile --broker`.
+    Value: !GetAtt BrokerRole.Arn
+  InvokerUser:
+    Description: Create one access key for it and give it to the agent's machine; it can only ask.
+    Value: !Ref Invoker

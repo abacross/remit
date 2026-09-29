@@ -51,6 +51,34 @@ jobs:
           name: ${{ matrix.target }}
           path: dist/*.tar.gz
           if-no-files-found: error
+  # The broker service's code (SPEC 8.4, deploy/aws/broker-service.yaml): a static arm64
+  # binary named `bootstrap`, zipped for Lambda's provided.al2023 runtime.
+  broker-lambda:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup show active-toolchain || rustup toolchain install
+      - run: rustup target add aarch64-unknown-linux-musl
+      - run: |
+          python3 -m venv "$RUNNER_TEMP/zig"
+          "$RUNNER_TEMP/zig/bin/pip" install --quiet --require-hashes --only-binary=:all: \
+            -r .github/release-tools.txt
+          echo "$RUNNER_TEMP/zig/bin" >> "$GITHUB_PATH"
+      - run: cargo zigbuild --release --locked -p remit-broker-lambda --target aarch64-unknown-linux-musl
+      - name: static
+        run: file target/aarch64-unknown-linux-musl/release/bootstrap | tee /dev/stderr | grep -q 'statically linked'
+      - name: package
+        run: |
+          mkdir -p dist
+          cd target/aarch64-unknown-linux-musl/release
+          zip -X "$GITHUB_WORKSPACE/dist/remit-broker-lambda-${GITHUB_REF_NAME}-arm64.zip" bootstrap
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: broker-lambda
+          path: dist/*.zip
+          if-no-files-found: error
   # The SBOM is made here, with no permission to write the release or sign for it, so a
   # tool it installs cannot touch the binaries or the attestation.
   sbom:
@@ -71,7 +99,7 @@ jobs:
           path: dist/*.cdx.json
           if-no-files-found: error
   release:
-    needs: [build, sbom]
+    needs: [build, broker-lambda, sbom]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -86,13 +114,16 @@ jobs:
           path: dist
           merge-multiple: true
       - name: sums
-        run: cd dist && sha256sum *.tar.gz *.cdx.json > SHA256SUMS
+        run: cd dist && sha256sum *.tar.gz *.zip *.cdx.json > SHA256SUMS
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-path: "dist/*.tar.gz"
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.zip
       - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           files: |
             dist/*.tar.gz
+            dist/*.zip
             dist/*.cdx.json
             dist/SHA256SUMS

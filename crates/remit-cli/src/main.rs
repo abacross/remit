@@ -45,6 +45,9 @@ enum Top {
     Init(project::InitArgs),
     /// Issue a warrant for one task, log it, prove it, and make it the agent's current one.
     Task(project::TaskArgs),
+    /// Print a signed request for a broker service (SPEC 8.4), as JSON, to send by any
+    /// means: `remit run --broker-function` sends one itself.
+    BrokerRequest(BrokerRequestArgs),
     /// Signing keys.
     #[command(subcommand)]
     Key(KeyCmd),
@@ -257,8 +260,9 @@ struct RunArgs {
     /// The warrant chain.
     #[arg(long)]
     chain: PathBuf,
-    /// Trusted root key identifiers; the chain must start at one of them.
-    #[arg(long = "root", required = true)]
+    /// Trusted root key identifiers; the chain must start at one of them. Not used with
+    /// `--broker-function`, where the broker service decides what it trusts.
+    #[arg(long = "root", required_unless_present = "broker_function")]
     roots: Vec<String>,
     /// The role to assume; its trust policy must require a source identity.
     #[arg(long)]
@@ -267,17 +271,70 @@ struct RunArgs {
     #[arg(long, default_value_t = 3600)]
     role_max_seconds: u64,
     /// The trust policy for the log (SPEC 9.2): no chain is honoured unless proven logged.
-    #[arg(long)]
-    log_policy: PathBuf,
+    /// Not used with `--broker-function`.
+    #[arg(long, required_unless_present = "broker_function")]
+    log_policy: Option<PathBuf>,
     /// The proof that every link of the chain is logged (`remit log prove`).
     #[arg(long)]
     log_proof: PathBuf,
     /// The region for STS and for the command; else the environment's, else us-east-1.
     #[arg(long)]
     region: Option<String>,
+    #[command(flatten)]
+    service: BrokerServiceArgs,
     /// The command and its arguments.
     #[arg(last = true, required = true)]
     command: Vec<String>,
+}
+
+#[derive(Args)]
+struct BrokerRequestArgs {
+    /// The warrant chain.
+    #[arg(long)]
+    chain: PathBuf,
+    /// Its proof of being logged.
+    #[arg(long)]
+    log_proof: PathBuf,
+    /// The role to ask for.
+    #[arg(long)]
+    role: String,
+    /// The key the warrant names as its subject.
+    #[arg(long, default_value = ".remit/agent.key")]
+    agent_key: PathBuf,
+}
+
+fn broker_request(a: &BrokerRequestArgs) -> Result<()> {
+    let chain = read_chain(&a.chain)?;
+    let proof = std::fs::read_to_string(&a.log_proof)
+        .map_err(|e| format!("{}: {e}", a.log_proof.display()))?;
+    let mut nonce = [0u8; 16];
+    getrandom::fill(&mut nonce).map_err(|e| format!("random source: {e}"))?;
+    let request = remit_broker::service::sign_request(
+        &read_seed(&a.agent_key)?,
+        &chain,
+        &proof,
+        &a.role,
+        now(),
+        nonce,
+    )?;
+    println!(
+        "{}",
+        serde_json::to_string(&request).map_err(|e| e.to_string())?
+    );
+    Ok(())
+}
+
+/// Asking a broker service for the session instead of holding the broker's key (SPEC
+/// 8.4): the service decides what it trusts, and only the warrant's subject can ask.
+#[derive(Args, Clone)]
+pub(crate) struct BrokerServiceArgs {
+    /// The broker service's Lambda function, by name or ARN. The credentials in the
+    /// environment need only permission to invoke it.
+    #[arg(long)]
+    pub broker_function: Option<String>,
+    /// The key the warrant names as its subject, which signs the request.
+    #[arg(long, default_value = ".remit/agent.key")]
+    pub agent_key: PathBuf,
 }
 
 type Result<T> = std::result::Result<T, String>;
@@ -438,9 +495,10 @@ pub(crate) struct SessionArgs<'a> {
     pub roots: &'a [String],
     pub role: &'a str,
     pub role_max_seconds: u64,
-    pub log_policy: &'a Path,
+    pub log_policy: Option<&'a Path>,
     pub log_proof: &'a Path,
     pub region: Option<&'a str>,
+    pub service: &'a BrokerServiceArgs,
 }
 
 /// A verified, logged session: the leaf warrant's plan, its STS credentials, the region.
@@ -452,55 +510,119 @@ pub(crate) struct Session {
     pub logged_size: u64,
 }
 
-/// Verifies the chain, that every link is proven logged (SPEC 9.3), and obtains an STS
-/// session stamped with the leaf warrant's identifier (SPEC 8.1). Nothing reaches AWS
-/// unless the chain verifies and is logged.
-/// Refuses to use AWS through anything but its own endpoints. The SDK takes an endpoint
-/// from `AWS_ENDPOINT_URL`, `AWS_ENDPOINT_URL_<SERVICE>` or the profile's `endpoint_url`,
-/// all of which whoever starts this process can set; the broker's `AssumeRole`, or the
-/// reconciler's reads of the record and the trust policies, would then go to a server of
-/// their choosing (found in the 2026-09-28 boundary review). The lookup is the one the
-/// SDK itself makes for each service, so what is refused is exactly what it would use.
-fn refuse_endpoint_overrides(config: &aws_config::SdkConfig, services: &[&str]) -> Result<()> {
-    if let Some(url) = config.endpoint_url() {
-        return Err(format!(
-            "refused: an endpoint override ({url}) would send AWS calls elsewhere"
-        ));
-    }
-    for service in services {
-        let key = aws_types::service_config::ServiceConfigKey::builder()
-            .service_id(service)
-            .env("AWS_ENDPOINT_URL")
-            .profile("endpoint_url")
-            .build()
-            .map_err(|e| e.to_string())?;
-        if let Some(url) = config.service_config().and_then(|c| c.load_config(key)) {
-            return Err(format!(
-                "refused: an endpoint override for {service} ({url}) would send its calls elsewhere"
-            ));
-        }
-    }
-    Ok(())
-}
-
-pub(crate) async fn open_session(a: &SessionArgs<'_>) -> Result<Session> {
-    let chain = read_chain(a.chain)?;
-    let plan = remit_broker::plan(&chain, &roots(a.roots)?, now(), a.role_max_seconds)
-        .map_err(|e| format!("refused: {e}"))?;
-    let logged = log::verify_links_logged(a.log_policy, &chain, a.log_proof)
-        .map_err(|e| format!("refused: {e}"))?;
-    // A machine with no configured region is common; STS still needs one, and the command
-    // should run in the same one (found on the first live session, 2026-09-24).
+/// The AWS configuration for a session: the given region, else the environment's, else
+/// us-east-1. A machine with no configured region is common; STS still needs one, and the
+/// command should run in the same one (found on the first live session, 2026-09-24).
+async fn aws_for(region: Option<&str>) -> aws_config::SdkConfig {
     let chain_of_regions = aws_config::meta::region::RegionProviderChain::first_try(
-        a.region.map(|r| aws_config::Region::new(r.to_owned())),
+        region.map(|r| aws_config::Region::new(r.to_owned())),
     )
     .or_default_provider()
     .or_else(aws_config::Region::from_static("us-east-1"));
-    let config = aws_config::defaults(aws_config::BehaviorVersion::latest())
+    aws_config::defaults(aws_config::BehaviorVersion::latest())
         .region(chain_of_regions)
         .load()
-        .await;
-    refuse_endpoint_overrides(&config, &["STS"])?;
+        .await
+}
+
+/// Asks the broker service for the session (SPEC 8.4): the request carries the chain, its
+/// proof and the role, signed by the agent's key; the service checks them against its own
+/// configuration and answers with a session or says why not. The credentials in this
+/// process's environment only invoke the service.
+async fn open_service_session(a: &SessionArgs<'_>, function: &str) -> Result<Session> {
+    let chain = read_chain(a.chain)?;
+    let leaf = chain.last().ok_or("empty chain")?.warrant().clone();
+    let proof = std::fs::read_to_string(a.log_proof)
+        .map_err(|e| format!("{}: {e}", a.log_proof.display()))?;
+    let agent = read_seed(&a.service.agent_key)?;
+    let mut nonce = [0u8; 16];
+    getrandom::fill(&mut nonce).map_err(|e| format!("random source: {e}"))?;
+    let request =
+        remit_broker::service::sign_request(&agent, &chain, &proof, a.role, now(), nonce)?;
+    let config = aws_for(a.region).await;
+    remit_broker::refuse_endpoint_overrides(&config, &["Lambda"])?;
+    let region = config
+        .region()
+        .map_or_else(|| "us-east-1".to_owned(), ToString::to_string);
+    let payload = serde_json::to_vec(&request).map_err(|e| e.to_string())?;
+    let out = aws_sdk_lambda::Client::new(&config)
+        .invoke()
+        .function_name(function)
+        .payload(aws_sdk_lambda::primitives::Blob::new(payload))
+        .send()
+        .await
+        .map_err(|e| {
+            format!(
+                "the broker service: {}",
+                aws_sdk_lambda::error::DisplayErrorContext(&e)
+            )
+        })?;
+    let body: serde_json::Value = out
+        .payload()
+        .map(|p| serde_json::from_slice(p.as_ref()))
+        .transpose()
+        .map_err(|e| format!("the broker service answered something else: {e}"))?
+        .unwrap_or_default();
+    if let Some(error) = out.function_error() {
+        return Err(format!("the broker service failed ({error}): {body}"));
+    }
+    if let Some(reason) = body.get("refused").and_then(serde_json::Value::as_str) {
+        return Err(format!("refused by the broker service: {reason}"));
+    }
+    let text = |k: &str| {
+        body.get(k)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+            .ok_or_else(|| format!("the broker service's answer has no {k}"))
+    };
+    let number = |k: &str| {
+        body.get(k)
+            .and_then(serde_json::Value::as_u64)
+            .ok_or_else(|| format!("the broker service's answer has no {k}"))
+    };
+    if text("warrant_id")? != leaf.id().as_str() {
+        return Err("the broker service answered for another warrant".into());
+    }
+    let policy = remit_aws::compile_session_policy(&leaf).map_err(|e| e.to_string())?;
+    Ok(Session {
+        plan: remit_broker::SessionPlan {
+            warrant_id: leaf.id(),
+            policy,
+            duration_seconds: number("duration_seconds")?,
+            subject: leaf.subject().as_str().to_owned(),
+        },
+        creds: remit_broker::SessionCredentials {
+            access_key_id: text("access_key_id")?,
+            secret_access_key: text("secret_access_key")?,
+            session_token: text("session_token")?,
+            expires_at: body
+                .get("expires_at")
+                .and_then(serde_json::Value::as_i64)
+                .ok_or("the broker service's answer has no expires_at")?,
+        },
+        region,
+        logged_origin: text("logged_origin")?,
+        logged_size: number("logged_size")?,
+    })
+}
+
+/// Verifies the chain, that every link is proven logged (SPEC 9.3), and obtains an STS
+/// session stamped with the leaf warrant's identifier (SPEC 8.1). Nothing reaches AWS
+/// unless the chain verifies and is logged.
+pub(crate) async fn open_session(a: &SessionArgs<'_>) -> Result<Session> {
+    if let Some(function) = &a.service.broker_function {
+        return open_service_session(a, function).await;
+    }
+    let log_policy = a
+        .log_policy
+        .ok_or("--log-policy is needed unless a broker service decides")?;
+    let chain = read_chain(a.chain)?;
+    let plan = remit_broker::plan(&chain, &roots(a.roots)?, now(), a.role_max_seconds)
+        .map_err(|e| format!("refused: {e}"))?;
+    let logged = log::verify_links_logged(log_policy, &chain, a.log_proof)
+        .map_err(|e| format!("refused: {e}"))?;
+    let config = aws_for(a.region).await;
+    remit_broker::refuse_endpoint_overrides(&config, &["STS"])?;
     let region = config
         .region()
         .map_or_else(|| "us-east-1".to_owned(), ToString::to_string);
@@ -539,9 +661,10 @@ async fn run(args: RunArgs) -> Result<ExitCode> {
         roots: &args.roots,
         role: &args.role,
         role_max_seconds: args.role_max_seconds,
-        log_policy: &args.log_policy,
+        log_policy: args.log_policy.as_deref(),
         log_proof: &args.log_proof,
         region: args.region.as_deref(),
+        service: &args.service,
     })
     .await?;
     eprintln!(
@@ -770,7 +893,7 @@ async fn reconcile(args: ReconcileArgs) -> Result<ExitCode> {
         .region(aws_config::Region::from_static("us-east-1"))
         .load()
         .await;
-    refuse_endpoint_overrides(&config, &["IAM", "CloudTrail"])?;
+    remit_broker::refuse_endpoint_overrides(&config, &["IAM", "CloudTrail"])?;
     let iam = aws_sdk_iam::Client::new(&config);
     let mut roles = Vec::new();
     let mut longest_session = 3600_u64;
@@ -1039,6 +1162,7 @@ async fn main() -> ExitCode {
     let outcome = match Cli::parse().command {
         Top::Init(a) => project::init(&a).map(|()| ExitCode::SUCCESS),
         Top::Task(a) => project::task(a).map(|()| ExitCode::SUCCESS),
+        Top::BrokerRequest(a) => broker_request(&a).map(|()| ExitCode::SUCCESS),
         Top::Key(k) => key(k).map(|()| ExitCode::SUCCESS),
         Top::Warrant(w) => warrant(w).map(|()| ExitCode::SUCCESS),
         Top::Run(r) => run(r).await,

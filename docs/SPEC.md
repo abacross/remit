@@ -380,6 +380,37 @@ Until a per-service table exists, the reconciler is the backstop: an event whose
 **Conformance.** Beyond the argument, compiled policies are checked against AWS's own evaluator, the IAM policy simulator, on generated warrants and requests: every request the simulator allows must be one the warrant permits.
 The first run, on 2026-09-24, found no violation in 144 decisions across five services, and the simulator treated resource case as significant in every probe; `conformance/RESULTS.md` has the detail and its limits.
 
+### 8.4 The broker as a service
+
+A broker that runs as its caller takes what it trusts from its caller: the root keys, the log's trust policy and the role are arguments, and whoever starts it chooses them (THREAT-MODEL, known gap 10).
+A broker service holds its own configuration, set by the people who issue warrants when they deploy it: the trusted root keys, the log's trust policy, the roles it may assume and their longest session.
+A caller cannot change any of it.
+
+A caller sends a request, JSON with these fields:
+
+- `format`: `remit-broker-request/1`;
+- `chain`: the warrant chain in its transport encoding (section 5.3), base64;
+- `proof`: the proof that every link is logged (section 9.4), as text;
+- `role`: the role to assume;
+- `time`: when the request was made, UTC seconds;
+- `nonce`: 16 random bytes, lowercase hex;
+- `signature`: Ed25519, lowercase hex, by the key the leaf warrant names as its subject, over the 8 bytes `REMITBv1` followed by these lines, each ending in a newline: `remit-broker-request/1`, `warrant <leaf warrant identifier>`, `role <role>`, `time <time>`, `nonce <nonce>`, `chain <lowercase hex SHA-256 of the chain's transport bytes>`.
+
+The service opens a session only if all of these hold, and otherwise refuses and says which failed:
+
+1. the request's time is within 60 seconds of the service's;
+2. the role is one it may assume;
+3. the chain verifies to one of its trusted roots and plans a session exactly (section 8.1);
+4. the chain is proven logged under its trust policy;
+5. the leaf warrant's subject is a key identifier (section 5.1), and the signature verifies under that key.
+
+The last makes a warrant usable only by its subject: every warrant is public in the log, and without it anyone who could reach a broker could use any valid one.
+The service then assumes the role exactly as section 8.1 says and returns the session's credentials, its length, and the log checkpoint the chain was proven at.
+It records each decision in its own log, with the warrant, the subject, the role and the session's key identifier, and never a credential.
+
+On AWS the service is a Lambda function (`deploy/aws/broker-service.yaml`) whose execution role is the only principal the managed roles admit; CloudTrail records its sessions as created by that role, and the reconciler's `--broker` names it.
+The agent's machine holds no broker key, only a credential that may invoke the function, which can do nothing without a warrant and its subject's key.
+
 ## 9. The log
 
 Decided in ADR 0007.

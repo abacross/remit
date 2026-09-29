@@ -359,6 +359,10 @@ fn split_u32(bytes: &[u8]) -> Result<(usize, &[u8]), SignatureError> {
 /// The domain reconciliation results are signed in (SPEC section 6.6).
 pub const RESULT_DOMAIN: &[u8; 8] = b"REMITRv1";
 
+/// The domain an agent signs a request to a broker service in (SPEC section 8.4): proof
+/// that the caller holds the key its warrant names as subject.
+pub const BROKER_REQUEST_DOMAIN: &[u8; 8] = b"REMITBv1";
+
 /// Signs `message` under an 8-byte domain other than a warrant's (`REMITWv1`), so a
 /// signature made for one kind of document can never be presented as another. The
 /// signature covers the domain followed by the message.

@@ -504,6 +504,46 @@ fn a_session_created_by_anyone_but_the_broker_or_another_way_is_caught() {
 }
 
 #[test]
+fn a_broker_service_is_recognized_by_its_role() {
+    // The broker service runs as its function's execution role; CloudTrail records its
+    // AssumeRole as a session of that role.
+    let service_role = "arn:aws:iam::111122223333:role/remit-broker-service";
+    let as_service = |e: &mut Vec<Value>| {
+        e[0]["userIdentity"] = json!({
+            "type": "AssumedRole",
+            "arn": "arn:aws:sts::111122223333:assumed-role/remit-broker-service/remit-broker",
+            "sessionContext": {"sessionIssuer": {"type": "Role", "arn": service_role}}
+        });
+    };
+    let w = warrant();
+    let roles = [ManagedRole {
+        arn: ROLE.to_owned(),
+        trust_problems: Vec::new(),
+    }];
+    let evs = events(as_service);
+    let reconcile_with = |brokers: &[String]| {
+        reconcile(&Input {
+            warrants: std::slice::from_ref(&w),
+            roles: &roles,
+            events: &evs,
+            from: w.not_before(),
+            to: w.not_after(),
+            now: w.not_after() + 3600,
+            settle_seconds: 900,
+            source: EventSource::EventHistory,
+            regions: &["us-east-1".to_owned()],
+            record_problems: &[],
+            brokers,
+            earlier: &[],
+        })
+    };
+    assert_eq!(reconcile_with(&[service_role.to_owned()]).findings, vec![]);
+    // Not a broker: the same role is not named, or only some other session of a role is.
+    let r = reconcile_with(&brokers());
+    assert_eq!(kinds(&r), vec![Kind::SessionMismatch]);
+}
+
+#[test]
 fn an_action_by_a_session_whose_creation_was_not_seen_fails_the_run() {
     // Red team F2(c): the creation is outside what the run gathered: another region's
     // STS endpoint, before the window, or a trail without global events.

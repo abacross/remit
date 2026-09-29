@@ -444,7 +444,15 @@ fn check_origin(e: &Event, brokers: &[String], add: &mut impl FnMut(Kind, &str, 
         );
     }
     let caller = e.identity_arn.as_deref().unwrap_or(&e.identity_type);
-    if !brokers.iter().any(|b| b == caller) {
+    // A broker is a user, or a role whose sessions call STS: a broker service runs as its
+    // function's execution role, recorded as a session of that role.
+    let issuer = (e.identity_type == "AssumedRole")
+        .then_some(e.session_issuer_arn.as_deref())
+        .flatten();
+    if !brokers
+        .iter()
+        .any(|b| b == caller || Some(b.as_str()) == issuer)
+    {
         add(
             Kind::SessionMismatch,
             &e.id,
