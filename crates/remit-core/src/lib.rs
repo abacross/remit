@@ -31,12 +31,14 @@
 pub mod attenuation;
 pub mod decode;
 pub mod encoding;
+pub mod escape;
 pub mod pattern;
 pub mod signed;
 pub mod warrant;
 
 pub use attenuation::{AttenuationError, check as check_attenuation};
 pub use decode::DecodeError;
+pub use escape::{Escape, escapes};
 pub use pattern::{ActionPattern, PatternError, ResourcePattern};
 pub use signed::{
     ChainError, IssuerKey, KeyId, MAX_CHAIN, RESULT_DOMAIN, SignatureError, SignedWarrant,

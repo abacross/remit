@@ -51,6 +51,9 @@ pub(crate) struct TaskArgs {
     /// Why, in words. Recorded in the warrant and the log, not enforced.
     #[arg(long)]
     purpose: String,
+    /// Issue even if a grant lets work escape the warrant; see `remit warrant issue`.
+    #[arg(long)]
+    allow_escape: bool,
 }
 
 fn default_root_key() -> Result<PathBuf> {
@@ -220,6 +223,7 @@ pub(crate) fn task(a: TaskArgs) -> Result<()> {
         starts_at: None,
         purpose: a.purpose,
         max_depth: 0,
+        allow_escape: a.allow_escape,
     };
     let w = build(&root, agent.id().as_str(), &g, None)?;
     let signed = root.sign(&w).map_err(|e| e.to_string())?;

@@ -182,6 +182,36 @@ fn a_task_needs_a_project_a_purpose_and_a_real_duration() {
 }
 
 #[test]
+fn a_grant_that_escapes_the_warrant_needs_saying_so() {
+    let s = Scratch::new("escape");
+    assert!(s.remit(&["init"]).status.success());
+    let task = |extra: &[&str]| {
+        let mut args = vec![
+            "task",
+            "--grant",
+            "iam:PassRole,lambda:CreateFunction=*",
+            "--for",
+            "10m",
+            "--purpose",
+            "deploy a function",
+        ];
+        args.extend_from_slice(extra);
+        s.remit(&args)
+    };
+    let refused = task(&[]);
+    assert!(!refused.status.success());
+    let why = text(&refused);
+    assert!(why.contains("iam:PassRole acts as another role"), "{why}");
+    assert!(why.contains("lambda:CreateFunction changes what runs later"));
+    assert!(!s.project().join(".remit/current.chain").exists());
+
+    let allowed = task(&["--allow-escape"]);
+    assert!(allowed.status.success(), "{}", text(&allowed));
+    assert!(text(&allowed).contains("issued although"));
+    assert!(s.project().join(".remit/current.chain").exists());
+}
+
+#[test]
 fn a_reader_that_leaves_gets_no_panic() {
     // `remit warrant show ... | head -1`: the reader closes the pipe before remit has
     // written everything. Closing it before the child starts writing makes that certain.

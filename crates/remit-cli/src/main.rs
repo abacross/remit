@@ -24,7 +24,7 @@ mod trail;
 use clap::{Args, Parser, Subcommand};
 use remit_core::{
     IssuerKey, KeyId, SignedWarrant, Warrant, WarrantSpec, check_attenuation, decode_chain,
-    encode_chain, verify_chain,
+    encode_chain, escapes, verify_chain,
 };
 
 #[derive(Parser)]
@@ -193,6 +193,11 @@ struct GrantArgs {
     /// Further delegations permitted.
     #[arg(long, default_value_t = 0)]
     max_depth: u64,
+    /// Issue even if a grant reaches an action that lets work escape the warrant
+    /// (another role, lasting credentials, IAM or resource policy changes, code that runs
+    /// later); refused without it.
+    #[arg(long)]
+    allow_escape: bool,
 }
 
 #[derive(Subcommand)]
@@ -343,7 +348,7 @@ fn build(
         .map(|(a, r)| (a.as_slice(), r.as_slice()))
         .collect();
     let start = g.starts_at.unwrap_or_else(now);
-    Warrant::new(&WarrantSpec {
+    let w = Warrant::new(&WarrantSpec {
         issuer: issuer.id().as_str(),
         subject,
         purpose: &g.purpose,
@@ -353,7 +358,30 @@ fn build(
         parent: parent.map(Warrant::id),
         max_depth: g.max_depth,
     })
-    .map_err(|e| e.to_string())
+    .map_err(|e| e.to_string())?;
+    // A delegated warrant can only narrow its parent, so the choice was made at the root.
+    let found = escapes(&w);
+    if parent.is_none() && !found.is_empty() {
+        let mut why = String::from("refused: these grants let work escape the warrant:\n");
+        for (i, action, reason) in &found {
+            let _ = writeln!(
+                why,
+                "  grant {}: {action} {}",
+                i.saturating_add(1),
+                reason.reason()
+            );
+        }
+        if !g.allow_escape {
+            why.push_str(
+                "The warrant bounds the call that does this, not what happens after it.\n\
+                 Narrow the grant, or pass --allow-escape if the role's own permissions are \
+                 the bound you mean to rely on.",
+            );
+            return Err(why);
+        }
+        eprint!("{}", why.replacen("refused: ", "issued although ", 1));
+    }
+    Ok(w)
 }
 
 fn describe(w: &Warrant) -> String {
