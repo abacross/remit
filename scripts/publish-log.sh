@@ -18,8 +18,9 @@ cp "$LOG/checkpoint" "$OUT/checkpoint"
 [ -d "$LOG/tile" ] && cp -R "$LOG/tile" "$OUT/tile"
 cp "$POLICY" "$OUT/policy.txt"
 touch "$OUT/.nojekyll"   # serve tile paths as they are
-# Nothing private may leave: no 12-digit account numbers anywhere in what is published.
-if grep -rIEl '(^|[^0-9])[0-9]{12}([^0-9]|$)' "$OUT/checkpoint" "$OUT/policy.txt" 2>/dev/null; then
+# Nothing private may leave: no 12-digit account numbers anywhere in what is published,
+# the tiles included, which carry every warrant whole and are binary, hence -a.
+if grep -raEl '(^|[^0-9])[0-9]{12}([^0-9]|$)' "$OUT/checkpoint" "$OUT/policy.txt" "$OUT/tile" 2>/dev/null; then
   echo "refusing: an account-number-like string in the published files" >&2; exit 1
 fi
 SIZE=$(sed -n 2p "$OUT/checkpoint")

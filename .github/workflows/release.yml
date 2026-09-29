@@ -26,11 +26,12 @@ jobs:
       - run: rustup show active-toolchain || rustup toolchain install
       - run: rustup target add ${{ matrix.target }}
       # Zig is the C compiler and linker for the static builds (aws-lc-sys has C code);
-      # both tools come pinned from PyPI into a venv.
+      # both tools come from PyPI into a venv, pinned by version and wheel hash.
       - if: contains(matrix.target, 'musl')
         run: |
           python3 -m venv "$RUNNER_TEMP/zig"
-          "$RUNNER_TEMP/zig/bin/pip" install --quiet ziglang==0.16.0 cargo-zigbuild==0.23.4
+          "$RUNNER_TEMP/zig/bin/pip" install --quiet --require-hashes --only-binary=:all: \
+            -r .github/release-tools.txt
           echo "$RUNNER_TEMP/zig/bin" >> "$GITHUB_PATH"
       - if: contains(matrix.target, 'musl')
         run: cargo zigbuild --release --locked -p remit-cli --target ${{ matrix.target }}
@@ -50,8 +51,27 @@ jobs:
           name: ${{ matrix.target }}
           path: dist/*.tar.gz
           if-no-files-found: error
+  # The SBOM is made here, with no permission to write the release or sign for it, so a
+  # tool it installs cannot touch the binaries or the attestation.
+  sbom:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup show active-toolchain || rustup toolchain install
+      - run: cargo install --locked cargo-cyclonedx --version 0.5.9
+      - run: |
+          cargo cyclonedx --format json --target all --spec-version 1.5
+          mkdir -p dist
+          cp crates/remit-cli/remit-cli.cdx.json "dist/remit-${GITHUB_REF_NAME}.cdx.json"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sbom
+          path: dist/*.cdx.json
+          if-no-files-found: error
   release:
-    needs: build
+    needs: [build, sbom]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -65,12 +85,6 @@ jobs:
         with:
           path: dist
           merge-multiple: true
-      - name: SBOM
-        run: |
-          rustup show active-toolchain || rustup toolchain install
-          cargo install --locked cargo-cyclonedx
-          cargo cyclonedx --format json --target all --spec-version 1.5
-          cp crates/remit-cli/remit-cli.cdx.json "dist/remit-${GITHUB_REF_NAME}.cdx.json"
       - name: sums
         run: cd dist && sha256sum *.tar.gz *.cdx.json > SHA256SUMS
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
