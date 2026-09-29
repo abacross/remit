@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/remit-core", "crates/remit-aws", "crates/remit-broker", "crates/remit-cli", "crates/remit-reconcile", "crates/remit-log", "crates/remit-logstore", "crates/remit-approver", "crates/remit-witness", "crates/remit-broker-lambda"]
 
 [workspace.package]
-version = "0.1.3"
+version = "0.1.4"
 edition = "2024"
 rust-version = "1.98"
 license = "Apache-2.0"

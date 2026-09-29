@@ -233,7 +233,7 @@ It found two flaws the component review missed, both fixed, and one that changes
 ### Who holds each zone
 
 A zone is only a boundary if a different principal holds it.
-On a machine where the agent runs as the person who set Remit up, which is what `remit init` makes and what Abacross ran on 2026-09-28, the zones collapse:
+On a machine where the agent runs as the person who set Remit up, which is what `remit init` makes, the zones collapse:
 
 | Zone | Meant to be held by | Held on a single-user machine by |
 | --- | --- | --- |
@@ -248,8 +248,8 @@ On a machine where the agent runs as the person who set Remit up, which is what 
 Every file listed was checked on 2026-09-28 and is owned by the agent's user.
 So on such a machine there are three principals, not six: the agent's user, AWS, and the outside world (GitHub, the timestamp authority).
 Only the boundaries with AWS and with the outside world are held by someone other than the agent.
-On the machine reviewed it was worse than one user: that user was in the `docker` group, which is root without a password, and WSL interop let any Linux process run programs as the owner's Windows account.
-A second user on the same system is therefore no boundary either; the agent needs a system of its own (`docs/PRODUCTION.md`).
+It is often worse than one user: membership of a group such as `docker` is root without a password, and on Windows, WSL interop lets any Linux process run programs as the Windows user.
+A second user on the same system is then no boundary either; the agent needs a system of its own (`docs/PRODUCTION.md`).
 
 ### Each crossing
 
@@ -277,7 +277,7 @@ On a single-user machine, Remit's local checks guide an agent that is not trying
 They do not bind an agent that is, because every file and process they rely on is the agent's own.
 What still holds there is what AWS holds: the role's own permissions are the most any session can do, and CloudTrail records every call, the agent's own sessions included.
 A reconciler run somewhere the agent cannot reach, with its own binary, trust anchors and key, would catch the agent's own warrants as unwarranted (their identifiers name no warrant in the real log) and its own sessions as mismatches.
-A reconciler run on the same machine, as Abacross ran it on 2026-09-28, is the agent grading itself: its result is true only as far as the agent is honest.
+A reconciler run on the same machine is the agent grading itself: its result is true only as far as the agent is honest.
 
 ## Does it hold up?
 

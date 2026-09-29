@@ -161,6 +161,8 @@ Reconciling reads CloudTrail event history, so its verdict says `complete, unval
 
 ## Before you trust a `complete`
 
+This guide sets Remit up on one machine, where the agent runs as you; that is right for trying it, and [docs/PRODUCTION.md](PRODUCTION.md) says what changes for relying on it.
+
 A `complete` verdict is exactly as strong as these, and the report restates the ones it relied on:
 
 - **The record covers the actions.** CloudTrail records management events by default and data events, such as reading an S3 object, only where you turn them on; turn them on for the resources that matter.
