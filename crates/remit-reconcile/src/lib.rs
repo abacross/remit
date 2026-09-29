@@ -171,6 +171,9 @@ pub struct Report {
     /// For a validated trail, what each region's verified digest chain covers (SPEC 6.7);
     /// filled by the caller, which validated it.
     pub record_coverage: Vec<trail::Coverage>,
+    /// For a validated trail, the trail's configuration as read at the time of the run:
+    /// what the record covers (SPEC 6.7); filled by the caller, which read it.
+    pub trail: Option<trail::TrailConfig>,
     /// The managed roles and whether each trust policy held.
     pub roles: BTreeMap<String, bool>,
     /// The verdict.
@@ -296,6 +299,7 @@ pub fn reconcile(input: &Input<'_>) -> Report {
         refused_inputs: Vec::new(),
         log: None,
         record_coverage: Vec::new(),
+        trail: None,
         roles: input
             .roles
             .iter()

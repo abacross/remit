@@ -787,6 +787,7 @@ type Gathered = (
     remit_reconcile::EventSource,
     Vec<String>,
     Vec<remit_reconcile::trail::Coverage>,
+    Option<remit_reconcile::trail::TrailConfig>,
 );
 
 /// Gathers the window's events, and the session creations from `lookback` seconds before
@@ -807,6 +808,7 @@ async fn gather_events(
     let mut seen = std::collections::BTreeSet::new();
     let mut record_problems = Vec::new();
     let mut coverage = Vec::new();
+    let mut trail_config = None;
     let source = if let (Some(dir), Some(bucket), Some(sigs)) =
         (&args.trail_dir, &args.trail_bucket, &args.trail_signatures)
     {
@@ -841,6 +843,16 @@ async fn gather_events(
         );
         record_problems = v.problems;
         coverage = v.coverage;
+        // The files are whole; what they cover is the trail's configuration, read now.
+        match trail::trail_config(config, bucket).await {
+            Ok(cfg) => {
+                record_problems.extend(remit_reconcile::trail::scope_problems(&cfg, &args.regions));
+                trail_config = Some(cfg);
+            }
+            Err(e) => {
+                record_problems.push(format!("the trail's configuration could not be read: {e}"));
+            }
+        }
         remit_reconcile::EventSource::ValidatedTrail
     } else {
         for region in &args.regions {
@@ -864,7 +876,14 @@ async fn gather_events(
         remit_reconcile::EventSource::EventHistory
     };
 
-    Ok((events, earlier, source, record_problems, coverage))
+    Ok((
+        events,
+        earlier,
+        source,
+        record_problems,
+        coverage,
+        trail_config,
+    ))
 }
 
 async fn reconcile(args: ReconcileArgs) -> Result<ExitCode> {
@@ -927,7 +946,7 @@ async fn reconcile(args: ReconcileArgs) -> Result<ExitCode> {
         });
     }
 
-    let (events, earlier, source, record_problems, coverage) =
+    let (events, earlier, source, record_problems, coverage, trail_config) =
         gather_events(&args, &config, from, to, longest_session).await?;
 
     let mut report = remit_reconcile::reconcile(&remit_reconcile::Input {
@@ -946,6 +965,7 @@ async fn reconcile(args: ReconcileArgs) -> Result<ExitCode> {
     });
     report.refused_inputs = refused;
     report.record_coverage = coverage;
+    report.trail = trail_config;
     report.log = Some(position);
     let json = report.to_json().map_err(|e| e.to_string())?;
     let signature = remit_core::sign_in_domain(&signer, REPORT_DOMAIN, json.as_bytes())
@@ -1042,6 +1062,15 @@ fn verify_report(report: &Path, signature: &Path, key_id: &str) -> Result<()> {
     );
     println!("  roles (trust policy held): {}", field(&parsed, "roles"));
     println!("  inputs refused: {}", field(&parsed, "refused_inputs"));
+    if let Some(t) = parsed.get("trail").filter(|t| !t.is_null()) {
+        println!(
+            "  trail: management events {}, data events {}, multi-region {}, validation {}",
+            field(t, "management"),
+            field(t, "data_events"),
+            field(t, "multi_region"),
+            field(t, "file_validation")
+        );
+    }
     let mut kinds = std::collections::BTreeMap::<String, u64>::new();
     for f in field(&parsed, "findings").as_array().into_iter().flatten() {
         let kind = field(f, "kind").as_str().unwrap_or("?").to_owned();

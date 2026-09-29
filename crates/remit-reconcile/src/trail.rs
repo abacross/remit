@@ -418,3 +418,136 @@ pub fn validate<S: BuildHasher>(
     }
     out
 }
+
+/// Which management events a trail records (SPEC 6.7).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Management {
+    /// Every management event, read and write, from every source.
+    All,
+    /// Some of them; the words say what is left out.
+    Partly(String),
+    /// None.
+    Nothing,
+}
+
+/// A trail's configuration as the run read it from CloudTrail, recorded in the result so
+/// that what `complete` covered is stated, not assumed (SPEC 6.7).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[allow(
+    // Each is one of CloudTrail's own yes-or-no settings, recorded as the trail has it.
+    clippy::struct_excessive_bools
+)]
+pub struct TrailConfig {
+    /// The trail's ARN.
+    pub arn: String,
+    /// The bucket it delivers to.
+    pub bucket: String,
+    /// Whether it records every region.
+    pub multi_region: bool,
+    /// Its home region.
+    pub home_region: String,
+    /// Whether it records global service events, such as IAM's.
+    pub global_service_events: bool,
+    /// Whether it is recording now.
+    pub logging: bool,
+    /// Whether it delivers digest files.
+    pub file_validation: bool,
+    /// Which management events it records.
+    pub management: Management,
+    /// The data events it records, as CloudTrail names their resource types.
+    pub data_events: Vec<String>,
+}
+
+/// Why a trail does not record everything a `complete` over `regions` relies on: every
+/// management event, from every region the run covers, global services included, with
+/// digest files. Data events are the warrants' concern and are stated, not required.
+#[must_use]
+pub fn scope_problems(t: &TrailConfig, regions: &[String]) -> Vec<String> {
+    let mut problems = Vec::new();
+    let name = &t.arn;
+    if !t.logging {
+        problems.push(format!("{name} is not logging"));
+    }
+    if !t.file_validation {
+        problems.push(format!("{name} has log file validation off"));
+    }
+    if !t.global_service_events {
+        problems.push(format!(
+            "{name} leaves out global service events (IAM, STS's global endpoint)"
+        ));
+    }
+    if !t.multi_region {
+        for r in regions.iter().filter(|r| **r != t.home_region) {
+            problems.push(format!("{name} records {} only, not {r}", t.home_region));
+        }
+    }
+    match &t.management {
+        Management::All => {}
+        Management::Partly(what) => {
+            problems.push(format!("{name} records management events without {what}"));
+        }
+        Management::Nothing => problems.push(format!("{name} records no management events")),
+    }
+    problems
+}
+
+#[cfg(test)]
+mod scope_tests {
+    use super::{Management, TrailConfig, scope_problems};
+
+    fn good() -> TrailConfig {
+        TrailConfig {
+            arn: "arn:aws:cloudtrail:us-east-1:111122223333:trail/t".into(),
+            bucket: "b".into(),
+            multi_region: true,
+            home_region: "us-east-1".into(),
+            global_service_events: true,
+            logging: true,
+            file_validation: true,
+            management: Management::All,
+            data_events: vec!["AWS::S3::Object".into()],
+        }
+    }
+
+    #[test]
+    fn a_trail_that_records_everything_everywhere_holds() {
+        let regions = ["us-east-1".to_owned(), "us-west-2".to_owned()];
+        assert!(scope_problems(&good(), &regions).is_empty());
+    }
+
+    /// One way a trail can record less.
+    type Edit = fn(&mut TrailConfig);
+
+    #[test]
+    fn each_way_a_trail_can_record_less_is_named() {
+        let regions = ["us-east-1".to_owned(), "us-west-2".to_owned()];
+        let cases: [(&str, Edit); 6] = [
+            ("not logging", |t| {
+                t.logging = false;
+            }),
+            ("validation off", |t| {
+                t.file_validation = false;
+            }),
+            ("global service events", |t| {
+                t.global_service_events = false;
+            }),
+            ("not us-west-2", |t| {
+                t.multi_region = false;
+            }),
+            ("without read events", |t| {
+                t.management = Management::Partly("read events".into());
+            }),
+            ("no management events", |t| {
+                t.management = Management::Nothing;
+            }),
+        ];
+        for (words, edit) in cases {
+            let mut t = good();
+            edit(&mut t);
+            let p = scope_problems(&t, &regions);
+            assert_eq!(p.len(), 1, "{words}: {p:?}");
+            assert!(p[0].contains(words), "{words}: {p:?}");
+        }
+    }
+}

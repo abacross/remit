@@ -314,6 +314,8 @@ A verifier is given the key it expects, refuses any other domain or key, and che
 A run may take its events from the trail's log files instead of event history, and then, and only then, its verdict may be **complete**.
 With log file integrity validation on, CloudTrail delivers a digest file every hour in every region, even an hour with no activity, listing the SHA-256 of the uncompressed content of each log file delivered in that hour, and chained to the previous digest by its location, the SHA-256 of its uncompressed content, and its RSA signature (CloudTrail user guide, "CloudTrail digest file structure" and "Custom implementations of CloudTrail log file integrity validation").
 
+A validated trail proves its files are whole, not what they cover, so the run also reads the configuration of the trail that delivers to the bucket (`DescribeTrails`, `GetTrailStatus`, `GetEventSelectors`), states it in the result, and fails unless the trail is logging, validates its files, records global service events, covers every region the run covers, and records every management event, read and write, from every source; the data events it records are stated, not required.
+
 The CloudTrail public keys the digests are checked against are asked of CloudTrail itself (`ListPublicKeys`), with the run's own credentials, unless a keys file is given; either way the result records, per region, the fingerprints the chain verified under and the newest digest's location and hash, so a verifier can check them against the keys AWS publishes.
 
 For each region the run covers, the reconciler requires a chain of digests that:

@@ -168,3 +168,243 @@ pub(crate) fn load(
         keys,
     })
 }
+
+/// Which management events these selectors record, and which data events: CloudTrail
+/// has two selector forms, and a trail uses one or the other.
+fn scope_of(
+    basic: &[aws_sdk_cloudtrail::types::EventSelector],
+    advanced: &[aws_sdk_cloudtrail::types::AdvancedEventSelector],
+) -> (remit_reconcile::trail::Management, Vec<String>) {
+    use aws_sdk_cloudtrail::types::ReadWriteType;
+    use remit_reconcile::trail::Management;
+    let mut found: Vec<Management> = Vec::new();
+    let mut data = Vec::new();
+    for s in basic {
+        data.extend(
+            s.data_resources()
+                .iter()
+                .filter_map(|r| r.r#type().map(str::to_owned)),
+        );
+        if s.include_management_events() == Some(false) {
+            continue;
+        }
+        let excluded = s.exclude_management_event_sources();
+        found.push(match s.read_write_type() {
+            Some(ReadWriteType::ReadOnly) => Management::Partly("write events".into()),
+            Some(ReadWriteType::WriteOnly) => Management::Partly("read events".into()),
+            _ if !excluded.is_empty() => {
+                Management::Partly(format!("events from {}", excluded.join(", ")))
+            }
+            _ => Management::All,
+        });
+    }
+    for s in advanced {
+        let fields = s.field_selectors();
+        let category = fields
+            .iter()
+            .find(|f| f.field() == "eventCategory")
+            .map(|f| f.equals().join(","));
+        match category.as_deref() {
+            Some("Management") => {
+                let limits: Vec<String> = fields
+                    .iter()
+                    .filter(|f| f.field() != "eventCategory")
+                    .map(|f| match (f.field(), f.equals()) {
+                        ("readOnly", [v]) if v == "true" => "write events".to_owned(),
+                        ("readOnly", [v]) if v == "false" => "read events".to_owned(),
+                        ("eventSource", _) if !f.not_equals().is_empty() => {
+                            format!("events from {}", f.not_equals().join(", "))
+                        }
+                        (other, _) => format!("events other than those its {other} selects"),
+                    })
+                    .collect();
+                found.push(if limits.is_empty() {
+                    Management::All
+                } else {
+                    Management::Partly(limits.join(" and "))
+                });
+            }
+            Some("Data") => data.extend(
+                fields
+                    .iter()
+                    .filter(|f| f.field() == "resources.type")
+                    .flat_map(|f| f.equals().iter().cloned()),
+            ),
+            _ => {}
+        }
+    }
+    data.sort();
+    data.dedup();
+    let management = if found.contains(&Management::All) {
+        Management::All
+    } else {
+        found.into_iter().next().unwrap_or(Management::Nothing)
+    };
+    (management, data)
+}
+
+/// The configuration of the trail that delivers to `bucket`, read from CloudTrail
+/// (SPEC 6.7): a validated record says its files are whole, and this says what they cover.
+pub(crate) async fn trail_config(
+    config: &aws_config::SdkConfig,
+    bucket: &str,
+) -> Result<remit_reconcile::trail::TrailConfig> {
+    let error = |what: &str, e: &dyn std::fmt::Display| format!("{what}: {e}");
+    let trails = aws_sdk_cloudtrail::Client::new(config)
+        .describe_trails()
+        .include_shadow_trails(true)
+        .send()
+        .await
+        .map_err(|e| {
+            error(
+                "describe-trails",
+                &aws_sdk_cloudtrail::error::DisplayErrorContext(&e),
+            )
+        })?;
+    let trail = trails
+        .trail_list()
+        .iter()
+        .filter(|t| t.s3_bucket_name() == Some(bucket))
+        .max_by_key(|t| t.is_multi_region_trail() == Some(true))
+        .ok_or_else(|| format!("no trail delivers to {bucket}"))?;
+    let arn = trail
+        .trail_arn()
+        .ok_or("a trail without an ARN")?
+        .to_owned();
+    let home = trail.home_region().unwrap_or("us-east-1").to_owned();
+    let client = aws_sdk_cloudtrail::Client::new(
+        &config
+            .to_builder()
+            .region(aws_config::Region::new(home.clone()))
+            .build(),
+    );
+    let status = client
+        .get_trail_status()
+        .name(&arn)
+        .send()
+        .await
+        .map_err(|e| {
+            error(
+                "get-trail-status",
+                &aws_sdk_cloudtrail::error::DisplayErrorContext(&e),
+            )
+        })?;
+    let selectors = client
+        .get_event_selectors()
+        .trail_name(&arn)
+        .send()
+        .await
+        .map_err(|e| {
+            error(
+                "get-event-selectors",
+                &aws_sdk_cloudtrail::error::DisplayErrorContext(&e),
+            )
+        })?;
+    let (management, data_events) = scope_of(
+        selectors.event_selectors(),
+        selectors.advanced_event_selectors(),
+    );
+    Ok(remit_reconcile::trail::TrailConfig {
+        arn,
+        bucket: bucket.to_owned(),
+        multi_region: trail.is_multi_region_trail() == Some(true),
+        home_region: home,
+        global_service_events: trail.include_global_service_events() == Some(true),
+        logging: status.is_logging() == Some(true),
+        file_validation: trail.log_file_validation_enabled() == Some(true),
+        management,
+        data_events,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::scope_of;
+    use aws_sdk_cloudtrail::types::{
+        AdvancedEventSelector, AdvancedFieldSelector, DataResource, EventSelector, ReadWriteType,
+    };
+    use remit_reconcile::trail::Management;
+
+    fn field(name: &str, equals: &[&str], not_equals: &[&str]) -> AdvancedFieldSelector {
+        let mut b = AdvancedFieldSelector::builder().field(name);
+        for v in equals {
+            b = b.equals(*v);
+        }
+        for v in not_equals {
+            b = b.not_equals(*v);
+        }
+        b.build().unwrap()
+    }
+
+    fn advanced(fields: Vec<AdvancedFieldSelector>) -> AdvancedEventSelector {
+        AdvancedEventSelector::builder()
+            .set_field_selectors(Some(fields))
+            .build()
+            .unwrap()
+    }
+
+    #[test]
+    fn basic_selectors_read_as_the_console_writes_them() {
+        let all = EventSelector::builder()
+            .read_write_type(ReadWriteType::All)
+            .include_management_events(true)
+            .data_resources(DataResource::builder().r#type("AWS::S3::Object").build())
+            .build();
+        assert_eq!(
+            scope_of(&[all], &[]),
+            (Management::All, vec!["AWS::S3::Object".to_owned()])
+        );
+        let reads = EventSelector::builder()
+            .read_write_type(ReadWriteType::ReadOnly)
+            .build();
+        assert_eq!(
+            scope_of(&[reads], &[]).0,
+            Management::Partly("write events".into())
+        );
+        let no_kms = EventSelector::builder()
+            .read_write_type(ReadWriteType::All)
+            .exclude_management_event_sources("kms.amazonaws.com")
+            .build();
+        assert_eq!(
+            scope_of(&[no_kms], &[]).0,
+            Management::Partly("events from kms.amazonaws.com".into())
+        );
+        let none = EventSelector::builder()
+            .include_management_events(false)
+            .build();
+        assert_eq!(scope_of(&[none], &[]).0, Management::Nothing);
+    }
+
+    #[test]
+    fn advanced_selectors_are_read_field_by_field() {
+        let all = advanced(vec![field("eventCategory", &["Management"], &[])]);
+        let data = advanced(vec![
+            field("eventCategory", &["Data"], &[]),
+            field(
+                "resources.type",
+                &["AWS::S3::Object", "AWS::Lambda::Function"],
+                &[],
+            ),
+        ]);
+        let (m, d) = scope_of(&[], &[all, data]);
+        assert_eq!(m, Management::All);
+        assert_eq!(d, vec!["AWS::Lambda::Function", "AWS::S3::Object"]);
+        let writes_only = advanced(vec![
+            field("eventCategory", &["Management"], &[]),
+            field("readOnly", &["false"], &[]),
+        ]);
+        assert_eq!(
+            scope_of(&[], &[writes_only]).0,
+            Management::Partly("read events".into())
+        );
+        let no_kms = advanced(vec![
+            field("eventCategory", &["Management"], &[]),
+            field("eventSource", &[], &["kms.amazonaws.com"]),
+        ]);
+        assert_eq!(
+            scope_of(&[], &[no_kms]).0,
+            Management::Partly("events from kms.amazonaws.com".into())
+        );
+        assert_eq!(scope_of(&[], &[]).0, Management::Nothing);
+    }
+}
