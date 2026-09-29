@@ -5,6 +5,9 @@ There, the agent runs as the person who set it up, so the issuing key, the log's
 
 Remit's claims hold when each part is held by a principal the agent is not.
 
+`deploy/aws/setup.sh` deploys the AWS side in order, as a person with administrator rights: the broker's verified code, the broker service, one role per kind of work that only the service may assume, and the off-host reconciler's role (`DRY_RUN=1` prints each command first).
+The reconciler's repository is set up with `deploy/github/README.md`.
+
 | Part | Where it runs | What the agent holds |
 | --- | --- | --- |
 | Issuing | The issuers' own machines; the key never enters the agent's system | Nothing |
