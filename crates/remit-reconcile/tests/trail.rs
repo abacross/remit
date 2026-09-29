@@ -116,6 +116,13 @@ fn a_whole_signed_chain_validates() {
     }
     // Two events per log file, three log files per region.
     assert_eq!(v.records.len(), 12);
+    // What a verifier needs to check the result without trusting the run's inputs: the
+    // keys that vouched for the chain, and where the chain ends.
+    for c in &v.coverage {
+        assert_eq!(c.key_fingerprints, vec![f.key.fingerprint.clone()]);
+        assert!(c.newest_digest.contains(&c.region), "{c:?}");
+        assert_eq!(c.newest_digest_sha256.len(), 64);
+    }
 }
 
 #[test]

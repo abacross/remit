@@ -455,6 +455,34 @@ pub(crate) struct Session {
 /// Verifies the chain, that every link is proven logged (SPEC 9.3), and obtains an STS
 /// session stamped with the leaf warrant's identifier (SPEC 8.1). Nothing reaches AWS
 /// unless the chain verifies and is logged.
+/// Refuses to use AWS through anything but its own endpoints. The SDK takes an endpoint
+/// from `AWS_ENDPOINT_URL`, `AWS_ENDPOINT_URL_<SERVICE>` or the profile's `endpoint_url`,
+/// all of which whoever starts this process can set; the broker's `AssumeRole`, or the
+/// reconciler's reads of the record and the trust policies, would then go to a server of
+/// their choosing (found in the 2026-09-28 boundary review). The lookup is the one the
+/// SDK itself makes for each service, so what is refused is exactly what it would use.
+fn refuse_endpoint_overrides(config: &aws_config::SdkConfig, services: &[&str]) -> Result<()> {
+    if let Some(url) = config.endpoint_url() {
+        return Err(format!(
+            "refused: an endpoint override ({url}) would send AWS calls elsewhere"
+        ));
+    }
+    for service in services {
+        let key = aws_types::service_config::ServiceConfigKey::builder()
+            .service_id(service)
+            .env("AWS_ENDPOINT_URL")
+            .profile("endpoint_url")
+            .build()
+            .map_err(|e| e.to_string())?;
+        if let Some(url) = config.service_config().and_then(|c| c.load_config(key)) {
+            return Err(format!(
+                "refused: an endpoint override for {service} ({url}) would send its calls elsewhere"
+            ));
+        }
+    }
+    Ok(())
+}
+
 pub(crate) async fn open_session(a: &SessionArgs<'_>) -> Result<Session> {
     let chain = read_chain(a.chain)?;
     let plan = remit_broker::plan(&chain, &roots(a.roots)?, now(), a.role_max_seconds)
@@ -472,6 +500,7 @@ pub(crate) async fn open_session(a: &SessionArgs<'_>) -> Result<Session> {
         .region(chain_of_regions)
         .load()
         .await;
+    refuse_endpoint_overrides(&config, &["STS"])?;
     let region = config
         .region()
         .map_or_else(|| "us-east-1".to_owned(), ToString::to_string);
@@ -741,6 +770,7 @@ async fn reconcile(args: ReconcileArgs) -> Result<ExitCode> {
         .region(aws_config::Region::from_static("us-east-1"))
         .load()
         .await;
+    refuse_endpoint_overrides(&config, &["IAM", "CloudTrail"])?;
     let iam = aws_sdk_iam::Client::new(&config);
     let mut roles = Vec::new();
     let mut longest_session = 3600_u64;

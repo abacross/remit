@@ -232,3 +232,102 @@ fn a_reader_that_leaves_gets_no_panic() {
     assert!(!stderr.contains("panicked"), "{stderr}");
     assert_eq!(out.status.code(), Some(141), "{stderr}");
 }
+
+#[test]
+fn an_endpoint_override_is_refused_before_any_call() {
+    // Whoever starts the broker or the reconciler can set these; the SDK would send the
+    // broker's AssumeRole, or the reconciler's reads of the record, wherever they point.
+    let s = Scratch::new("endpoint");
+    assert!(s.remit(&["init"]).status.success());
+    let t = s.remit(&[
+        "task",
+        "--grant",
+        "s3:ListBucket=*",
+        "--for",
+        "1h",
+        "--purpose",
+        "x",
+    ]);
+    assert!(t.status.success(), "{}", text(&t));
+    let root = String::from_utf8(
+        s.remit(&["key", "id", "--key", s.root_key().to_str().unwrap()])
+            .stdout,
+    )
+    .unwrap()
+    .trim()
+    .to_owned();
+    let with = |var: &str, args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_remit"))
+            .args(args)
+            .current_dir(s.project())
+            .env_clear()
+            .env("HOME", s.0.join("home"))
+            .env("PATH", "/usr/bin:/bin")
+            .env("AWS_CONFIG_FILE", "/dev/null")
+            .env("AWS_SHARED_CREDENTIALS_FILE", "/dev/null")
+            .env("AWS_EC2_METADATA_DISABLED", "true")
+            .env("AWS_ACCESS_KEY_ID", "AKIAEXAMPLEEXAMPLE00")
+            .env("AWS_SECRET_ACCESS_KEY", "example")
+            .env(var, "http://127.0.0.1:9")
+            .output()
+            .unwrap()
+    };
+    let run = with(
+        "AWS_ENDPOINT_URL_STS",
+        &[
+            "run",
+            "--chain",
+            ".remit/current.chain",
+            "--root",
+            &root,
+            "--role",
+            "arn:aws:iam::111122223333:role/r",
+            "--log-policy",
+            ".remit/log.policy",
+            "--log-proof",
+            ".remit/current.proof",
+            "--region",
+            "us-east-1",
+            "--",
+            "true",
+        ],
+    );
+    assert!(!run.status.success());
+    assert!(
+        text(&run).contains("endpoint override for STS"),
+        "{}",
+        text(&run)
+    );
+    let reconcile = with(
+        "AWS_ENDPOINT_URL",
+        &[
+            "reconcile",
+            "--log-dir",
+            ".remit/log",
+            "--log-policy",
+            ".remit/log.policy",
+            "--root",
+            &root,
+            "--role",
+            "arn:aws:iam::111122223333:role/r",
+            "--broker",
+            "arn:aws:iam::111122223333:user/b",
+            "--region",
+            "us-east-1",
+            "--from",
+            "2026-09-28T00:00:00Z",
+            "--to",
+            "2026-09-28T01:00:00Z",
+            "--key",
+            s.root_key().to_str().unwrap(),
+            "--out",
+            "r.json",
+        ],
+    );
+    assert!(!reconcile.status.success());
+    assert!(
+        text(&reconcile).contains("endpoint override"),
+        "{}",
+        text(&reconcile)
+    );
+}

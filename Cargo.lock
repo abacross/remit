@@ -1769,6 +1769,7 @@ dependencies = [
  "aws-sdk-cloudtrail",
  "aws-sdk-iam",
  "aws-sdk-sts",
+ "aws-types",
  "clap",
  "flate2",
  "getrandom 0.4.3",

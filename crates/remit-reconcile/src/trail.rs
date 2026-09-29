@@ -57,6 +57,15 @@ pub struct Coverage {
     pub digests: usize,
     /// Log files verified.
     pub log_files: usize,
+    /// The fingerprints of the CloudTrail public keys whose signatures the chain verified
+    /// under. The keys were given to the run, not fetched by it, so a verifier compares
+    /// these with the keys AWS publishes (`aws cloudtrail list-public-keys`).
+    pub key_fingerprints: Vec<String>,
+    /// The newest verified digest, as `bucket/key`, and the SHA-256 of its uncompressed
+    /// content: where a verifier with access to the bucket starts checking the chain again.
+    pub newest_digest: String,
+    /// That digest's SHA-256, lowercase hex.
+    pub newest_digest_sha256: String,
 }
 
 /// The outcome: the records of every verified log file, what was covered, and every
@@ -388,12 +397,22 @@ pub fn validate<S: BuildHasher>(
             ));
         }
         if out.problems.len() == before {
+            let key_fingerprints = chain
+                .iter()
+                .filter_map(|p| text(&p.json, "digestPublicKeyFingerprint"))
+                .map(str::to_owned)
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
+                .collect();
             out.coverage.push(Coverage {
                 region,
                 start: first.start,
                 end: last.end,
                 digests: chain.len(),
                 log_files,
+                key_fingerprints,
+                newest_digest: format!("{}/{}", last.file.bucket, last.file.object),
+                newest_digest_sha256: last.sha256.clone(),
             });
         }
     }
