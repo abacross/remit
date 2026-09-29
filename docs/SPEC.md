@@ -247,15 +247,22 @@ It must carry a `sourceIdentity`, the identifier must name a warrant `W` in the 
 One that does not carry a known identifier is an **unwarranted event**; one outside its warrant's window is an **out-of-window event**.
 A managed action with an error code is also reported as a **refused attempt**, which is information, not a failure: nothing was done.
 
+**A call on a session's behalf** is a managed action with no `sourceIdentity` and a `userIdentity.invokedBy` naming the AWS service that made it.
+AWS does not capture the source identity for these (assumption 4), and it sets `invokedBy` itself, so a caller cannot claim it.
+It is outside the claim and counted by service in every result; AWS enforced the session's own permissions on it, but the record does not say which warrant it served.
+A managed action with no source identity and no `invokedBy` is still an unwarranted event: the trust policy requires a source identity on every session, so the agent's own calls always carry one.
+
 **Everything else** is activity by principals Remit does not manage.
 It is not a finding against the claim, which is about managed principals only, but it is counted by principal in every result, so that the claim's coverage is visible rather than implied.
+A service acting as itself has no principal ARN and is counted as `AWSService:<service>`.
 
 ### 6.3 The warrant cross-check
 
 For every successful managed action, the reconciler also asks whether `W` permits the recorded action on the recorded resource (section 3.4, with the request built by section 6.5); time is not part of this question, because an event outside the window is already its own finding, and one fault is reported once.
 This is a second line of defence: the primary guarantee is that AWS enforced the compiled policy, which never allows more than `W` (section 8.3).
 A request the cross-check finds outside `W` is an **outside-warrant event** and fails the run, because it means either a mapping gap or a soundness failure, and both must be looked at.
-A request whose resource cannot be determined is **undetermined**, reported and never guessed.
+An event that names no resource is checked as far as it can be: if no grant names any action that authorizes it, it is an outside-warrant event, because the work was outside `W` whatever it touched.
+If a grant does name such an action, the resource cannot be compared, and the event is **undetermined**, reported and never guessed.
 
 ### 6.4 The verdict
 
@@ -270,14 +277,20 @@ Any failure makes the verdict **incomplete**, with every finding listed.
 
 ### 6.5 From an event to a request
 
-- **Action:** the event source without `.amazonaws.com`, a colon, and the event name. Where a service's IAM action differs from its event name, the difference is a mapping gap, surfaced by the cross-check rather than hidden by it. **Open:** a per-service table of such differences.
-- **Resource:** every ARN in the event's `resources`. An event with none is undetermined.
+- **Action:** the actions that authorize the event, any one of which is enough.
+  By default that is one action: the event source without `.amazonaws.com`, a colon, and the event name.
+  Where AWS authorizes an operation with a differently named action, a table gives the actions instead:
+  the 60 Amazon S3 operations the Amazon S3 User Guide lists that way ("Required permissions for Amazon S3 API operations": `HeadObject` needs `s3:GetObject`, `ListBuckets` needs `s3:ListAllMyBuckets`; a versioned request may need the `...Version` action instead, so both are listed);
+  Lambda, whose event names carry the API version (`GetFunction20150331v2` is `lambda:GetFunction`) and whose `Invoke` and `InvokeWithResponseStream` need `lambda:InvokeFunction`;
+  and `sts:GetCallerIdentity`, which needs no permission and is never outside a warrant.
+  A difference in another service is still a mapping gap, and it is surfaced by the cross-check as an outside-warrant event rather than hidden by it.
+- **Resource:** every ARN in the event's `resources`. An event with none is checked by action alone (section 6.3).
 - **Subject:** the warrant's subject; **time:** the event time.
 
 ### 6.6 The result
 
 A result is a JSON document written once and signed as written: the signature is over the exact bytes, and a verifier checks it before parsing.
-It states the window, the event source and its integrity evidence, the settling period, the regions covered, the inputs refused, the managed roles and whether each trust policy was as required, the verdict, every finding with its event identifier, the per-warrant event counts, in total and by action, and the unmanaged activity by principal.
+It states the window, the event source and its integrity evidence, the settling period, the regions covered, the inputs refused, the managed roles and whether each trust policy was as required, the verdict, every finding with its event identifier, the per-warrant event counts, in total and by action (the operation the record names), the calls made on a session's behalf by service, and the unmanaged activity by principal.
 The counts by action say what each warrant was used for, refused attempts included, and never name a resource: resource names stay in the cloud record, so that a published result discloses no more than its warrants do.
 The reconciler signs with its own key, which is not a warrant issuer's key.
 

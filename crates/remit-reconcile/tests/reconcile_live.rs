@@ -14,7 +14,8 @@
     clippy::missing_panics_doc
 )]
 
-use remit_core::{KeyId, Warrant, decode_chain, verify_chain};
+use remit_aws::compile_session_policy;
+use remit_core::{KeyId, Warrant, WarrantSpec, decode_chain, verify_chain};
 use remit_reconcile::{
     Event, EventSource, Input, Kind, ManagedRole, Report, Verdict, reconcile, trust_policy_problems,
 };
@@ -190,6 +191,153 @@ fn an_action_outside_the_window_or_the_warrant_is_caught() {
         3600,
     );
     assert_eq!(kinds(&r), vec![Kind::OutsideWarrantEvent]);
+}
+
+#[test]
+fn an_event_that_names_no_resource_fails_unless_a_grant_names_its_action() {
+    // ListBuckets records no resource, and is authorized by s3:ListAllMyBuckets, which
+    // this warrant does not grant: the work was outside the warrant whatever it touched.
+    let r = run(
+        &events(|e| {
+            e[1]["eventName"] = json!("ListBuckets");
+            e[1]["resources"] = json!([]);
+        }),
+        &fixture("trust-policy.json"),
+        3600,
+    );
+    assert_eq!(kinds(&r), vec![Kind::OutsideWarrantEvent]);
+    assert!(
+        r.findings[0]
+            .detail
+            .contains("s3:ListBuckets is not granted")
+    );
+    assert_eq!(r.verdict, Verdict::Incomplete);
+
+    // A granted action with no resource to compare cannot be checked further, and says so.
+    let r = run(
+        &events(|e| e[1]["resources"] = json!([])),
+        &fixture("trust-policy.json"),
+        3600,
+    );
+    assert_eq!(kinds(&r), vec![Kind::Undetermined]);
+    assert_eq!(r.verdict, Verdict::CompleteUnvalidated);
+
+    // An operation that needs no permission is never outside a warrant.
+    let r = run(
+        &events(|e| {
+            e[1]["eventSource"] = json!("sts.amazonaws.com");
+            e[1]["eventName"] = json!("GetCallerIdentity");
+            e[1]["resources"] = json!([]);
+        }),
+        &fixture("trust-policy.json"),
+        3600,
+    );
+    assert_eq!(r.findings, vec![]);
+}
+
+/// The live warrant with `actions` added as a grant on its own resources, and the recorded
+/// events rewritten as if the broker had issued the session for it, with `edit` applied.
+fn widened(actions: &[&str], mut edit: impl FnMut(&mut Vec<Value>)) -> (Warrant, Vec<Event>) {
+    let live = warrant();
+    let resources: Vec<&str> = live.grants()[0]
+        .resources()
+        .iter()
+        .map(remit_core::ResourcePattern::as_str)
+        .collect();
+    let first: Vec<&str> = live.grants()[0]
+        .actions()
+        .iter()
+        .map(remit_core::ActionPattern::as_str)
+        .collect();
+    let grants: [(&[&str], &[&str]); 2] = [(&first, &resources), (actions, &resources)];
+    let w = Warrant::new(&WarrantSpec {
+        issuer: live.issuer().as_str(),
+        subject: live.subject().as_str(),
+        purpose: live.purpose(),
+        not_before: live.not_before(),
+        not_after: live.not_after(),
+        grants: &grants,
+        parent: None,
+        max_depth: live.max_depth(),
+    })
+    .unwrap();
+    let text = serde_json::to_string(&recorded())
+        .unwrap()
+        .replace(live.id().as_str(), w.id().as_str());
+    let mut raw: Vec<Value> = serde_json::from_str(&text).unwrap();
+    raw[0]["requestParameters"]["durationSeconds"] = json!(3566 - 60);
+    raw[0]["requestParameters"]["policy"] = json!(compile_session_policy(&w).unwrap());
+    edit(&mut raw);
+    let events = raw.iter().map(|v| Event::from_json(v).unwrap()).collect();
+    (w, events)
+}
+
+fn run_for(w: &Warrant, events: &[Event]) -> Report {
+    let roles = [ManagedRole {
+        arn: ROLE.to_owned(),
+        trust_problems: trust_policy_problems(&fixture("trust-policy.json")),
+    }];
+    reconcile(&Input {
+        warrants: std::slice::from_ref(w),
+        roles: &roles,
+        events,
+        from: w.not_before(),
+        to: w.not_after(),
+        now: w.not_after() + 3600,
+        settle_seconds: 900,
+        source: EventSource::EventHistory,
+        regions: &["us-east-1".to_owned(), "us-west-2".to_owned()],
+        record_problems: &[],
+    })
+}
+
+#[test]
+fn an_event_is_checked_against_the_action_that_authorizes_it() {
+    let head = |e: &mut Vec<Value>| e[1]["eventName"] = json!("HeadBucket");
+    // HeadBucket is authorized by s3:ListBucket: a warrant granting that covers it...
+    let (w, events) = widened(&["s3:ListBucket"], head);
+    let r = run_for(&w, &events);
+    assert_eq!(r.findings, vec![], "{}", r.to_json().unwrap());
+    // ...and the report still names the operation the record shows.
+    assert_eq!(r.actions_by_warrant[w.id().as_str()]["s3:HeadBucket"], 1);
+    // A grant named after the operation is not what AWS checks, and does not cover it.
+    let (w, events) = widened(&["s3:HeadBucket"], head);
+    assert_eq!(
+        kinds(&run_for(&w, &events)),
+        vec![Kind::OutsideWarrantEvent]
+    );
+}
+
+#[test]
+fn what_a_service_does_is_counted_by_service_and_is_not_the_agent() {
+    // A service calling for the managed session: the record has no source identity, so it
+    // cannot be joined to a warrant; it is outside the claim and counted by service.
+    let r = run(
+        &events(|e| {
+            e[1]["userIdentity"]["sessionContext"]
+                .as_object_mut()
+                .unwrap()
+                .remove("sourceIdentity");
+            e[1]["userIdentity"]["invokedBy"] = json!("cloudformation.amazonaws.com");
+        }),
+        &fixture("trust-policy.json"),
+        3600,
+    );
+    assert_eq!(r.findings, vec![], "{}", r.to_json().unwrap());
+    assert_eq!(r.on_behalf["cloudformation.amazonaws.com"], 1);
+
+    // A service acting as itself is unmanaged, and named.
+    let r = run(
+        &events(|e| {
+            e[2]["userIdentity"] = json!({
+                "type": "AWSService",
+                "invokedBy": "config.amazonaws.com"
+            });
+        }),
+        &fixture("trust-policy.json"),
+        3600,
+    );
+    assert_eq!(r.unmanaged["AWSService:config.amazonaws.com"], 1);
 }
 
 #[test]

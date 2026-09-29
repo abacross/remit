@@ -30,6 +30,8 @@ pub struct Event {
     pub session_issuer_arn: Option<String>,
     /// `userIdentity.sessionContext.sourceIdentity`.
     pub source_identity: Option<String>,
+    /// `userIdentity.invokedBy`: the AWS service that made the call, when one did.
+    pub invoked_by: Option<String>,
     /// `requestParameters`, kept whole for the session-creation checks.
     pub request_parameters: Value,
     /// Every `resources[].ARN`.
@@ -92,6 +94,7 @@ impl Event {
                 &["userIdentity", "sessionContext", "sessionIssuer", "arn"],
             ),
             source_identity: text(v, &["userIdentity", "sessionContext", "sourceIdentity"]),
+            invoked_by: text(v, &["userIdentity", "invokedBy"]),
             request_parameters: v.get("requestParameters").cloned().unwrap_or(Value::Null),
             resources,
         })
@@ -106,6 +109,13 @@ impl Event {
             .strip_suffix(".amazonaws.com")
             .unwrap_or(&self.source);
         format!("{service}:{}", self.name)
+    }
+
+    /// The IAM actions any one of which authorizes this event (SPEC section 6.5); empty
+    /// for an operation that needs no permission.
+    #[must_use]
+    pub fn authorizing_actions(&self) -> Vec<String> {
+        crate::authorize::authorizing_actions(&self.source, &self.name)
     }
 
     /// A request parameter as text.

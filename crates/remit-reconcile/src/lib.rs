@@ -7,6 +7,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod authorize;
 pub mod event;
 pub mod trail;
 pub mod trust;
@@ -177,8 +178,13 @@ pub struct Report {
     /// Sessions created per warrant identifier.
     pub sessions_per_warrant: BTreeMap<String, u64>,
     /// Events by principals Remit does not manage, per principal: outside the claim, and
-    /// counted so that its coverage is visible.
+    /// counted so that its coverage is visible. An AWS service acting as itself is named
+    /// `AWSService:<service>`.
     pub unmanaged: BTreeMap<String, u64>,
+    /// Calls an AWS service made for a managed session, which `CloudTrail` records without
+    /// the session's source identity: per service. Outside the claim (SPEC section 6,
+    /// assumption 4), and counted so that it is seen.
+    pub on_behalf: BTreeMap<String, u64>,
     /// Events considered in total.
     pub events: u64,
 }
@@ -213,6 +219,7 @@ pub fn reconcile(input: &Input<'_>) -> Report {
     let mut by_action = BTreeMap::new();
     let mut sessions = BTreeMap::new();
     let mut unmanaged = BTreeMap::new();
+    let mut on_behalf = BTreeMap::new();
     let mut add = |kind, subject: &str, detail: String| {
         findings.push(Finding {
             kind,
@@ -242,12 +249,18 @@ pub fn reconcile(input: &Input<'_>) -> Report {
         if is_session_creation {
             check_session(e, &by_id, &mut sessions, &mut add);
         } else if is_managed_action {
-            check_action(e, &by_id, &mut actions, &mut by_action, &mut add);
+            match (&e.source_identity, &e.invoked_by) {
+                // A service acting for the session: AWS enforced the session's own
+                // permissions, but the record does not say which warrant it served.
+                (None, Some(service)) => increment(&mut on_behalf, service),
+                _ => check_action(e, &by_id, &mut actions, &mut by_action, &mut add),
+            }
         } else {
-            let who = e
-                .identity_arn
-                .clone()
-                .unwrap_or_else(|| e.identity_type.clone());
+            let who = match (&e.identity_arn, &e.invoked_by) {
+                (Some(arn), _) => arn.clone(),
+                (None, Some(service)) => format!("{}:{service}", e.identity_type),
+                (None, None) => e.identity_type.clone(),
+            };
             increment(&mut unmanaged, &who);
         }
     }
@@ -286,6 +299,7 @@ pub fn reconcile(input: &Input<'_>) -> Report {
         actions_by_warrant: by_action,
         sessions_per_warrant: sessions,
         unmanaged,
+        on_behalf,
         events: u64::try_from(input.events.len()).unwrap_or(u64::MAX),
     }
 }
@@ -395,12 +409,31 @@ fn check_action(
         );
         return;
     }
+    let authorizing = e.authorizing_actions();
+    if authorizing.is_empty() {
+        return;
+    }
     if e.resources.is_empty() {
-        add(
-            Kind::Undetermined,
-            &e.id,
-            format!("{}: the event names no resource", e.action()),
-        );
+        // With no resource to check, the question left is whether any grant names the
+        // action at all. If none does, the work was outside the warrant whatever it touched.
+        let named = w.grants().iter().any(|g| {
+            g.actions()
+                .iter()
+                .any(|p| authorizing.iter().any(|a| p.matches(a)))
+        });
+        if named {
+            add(
+                Kind::Undetermined,
+                &e.id,
+                format!("{}: the event names no resource", e.action()),
+            );
+        } else {
+            add(
+                Kind::OutsideWarrantEvent,
+                &e.id,
+                format!("{} is not granted by {si} on any resource", e.action()),
+            );
+        }
         return;
     }
     let subject = w.subject().as_str();
@@ -408,8 +441,9 @@ fn check_action(
     // so one fault is reported once.
     let at = e.time.clamp(w.not_before(), w.not_after());
     for resource in &e.resources {
-        let permitted =
-            Request::new(subject, &e.action(), resource, at).is_ok_and(|r| w.permits(&r));
+        let permitted = authorizing
+            .iter()
+            .any(|action| Request::new(subject, action, resource, at).is_ok_and(|r| w.permits(&r)));
         if !permitted {
             add(
                 Kind::OutsideWarrantEvent,
