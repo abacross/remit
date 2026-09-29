@@ -66,14 +66,15 @@ impl Scratch {
         path.to_str().unwrap().to_owned()
     }
 
-    /// A well-behaved stand-in: writes tokens/<digest>.tok and counts its runs.
+    /// A well-behaved stand-in for an `OpenTimestamps` calendar, whose proof remit checks
+    /// only for presence: writes tokens/<digest>.tok and counts its runs.
     fn good(&self) -> String {
         let count = self.0.join("runs");
         self.submitter(
             "good.sh",
             &format!(
                 "mkdir -p \"$REMIT_ANCHORS/tokens\"\nprintf x > \"$REMIT_ANCHORS/tokens/$1.tok\"\n\
-                 echo run >> {}\nprintf '{{\"kind\":\"test\",\"token\":\"tokens/%s.tok\"}}' \"$1\"",
+                 echo run >> {}\nprintf '{{\"kind\":\"opentimestamps\",\"state\":\"confirmed in Bitcoin block 1\",\"token\":\"tokens/%s.tok\"}}' \"$1\"",
                 count.display()
             ),
         )
@@ -158,6 +159,9 @@ fn a_checkpoint_is_anchored_once_and_stays_verifiable_as_the_log_grows() {
     let now = s.verify();
     assert!(now.status.success(), "{}", text(&now));
     assert!(text(&now).contains("the current checkpoint is anchored"));
+    // What the receipt claims is not repeated as if it had been checked.
+    assert!(!text(&now).contains("Bitcoin block 1"), "{}", text(&now));
+    assert!(text(&now).contains("not checked here"));
 
     s.task("second");
     let later = s.verify();
@@ -238,5 +242,31 @@ fn a_receipt_pointing_outside_the_anchors_or_a_failing_authority_records_nothing
         text(&verified).contains("no authority has anchored it"),
         "{}",
         text(&verified)
+    );
+}
+
+#[test]
+fn no_anchors_or_an_unknown_kind_is_not_a_pass() {
+    let s = Scratch::new("none");
+    let none = s.verify();
+    assert!(!none.status.success());
+    assert!(
+        text(&none).contains("no anchored checkpoint"),
+        "{}",
+        text(&none)
+    );
+
+    let odd = s.submitter(
+        "odd.sh",
+        "mkdir -p \"$REMIT_ANCHORS/tokens\"\nprintf x > \"$REMIT_ANCHORS/tokens/$1.tok\"\n\
+         printf '{\"kind\":\"notary\",\"token\":\"tokens/%s.tok\"}' \"$1\"",
+    );
+    assert!(s.anchor(&odd).status.success());
+    let unknown = s.verify();
+    assert!(!unknown.status.success());
+    assert!(
+        text(&unknown).contains("not a kind of anchor remit knows"),
+        "{}",
+        text(&unknown)
     );
 }

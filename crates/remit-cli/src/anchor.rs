@@ -171,7 +171,14 @@ pub(crate) fn anchor(dir: &Path, submitters: &[PathBuf]) -> Result<()> {
 
 /// The digest an RFC 3161 token is over, read by openssl so no hand-written DER decides it.
 /// `None` when openssl is not available.
-fn token_imprint(token: &Path) -> Option<std::result::Result<String, String>> {
+/// What an RFC 3161 token says, read by `openssl`: the digest it is over, and the time the
+/// authority put in it.
+struct TokenText {
+    imprint: String,
+    time: Option<String>,
+}
+
+fn token_imprint(token: &Path) -> Option<std::result::Result<TokenText, String>> {
     let out = Command::new("openssl")
         .args(["ts", "-reply", "-text", "-in"])
         .arg(token)
@@ -182,6 +189,10 @@ fn token_imprint(token: &Path) -> Option<std::result::Result<String, String>> {
     }
     let text = String::from_utf8_lossy(&out.stdout).into_owned();
     let mut imprint = String::new();
+    let time = text
+        .lines()
+        .find_map(|l| l.trim_start().strip_prefix("Time stamp:"))
+        .map(|t| t.trim().to_owned());
     let mut in_data = false;
     for line in text.lines() {
         if line.trim_start().starts_with("Message data:") {
@@ -206,7 +217,7 @@ fn token_imprint(token: &Path) -> Option<std::result::Result<String, String>> {
             }
         }
     }
-    Some(Ok(imprint))
+    Some(Ok(TokenText { imprint, time }))
 }
 
 fn short(digest: &str) -> &str {
@@ -270,29 +281,28 @@ fn check_kept(
         if let Some(missing) = paths.iter().find(|p| !anchors.join(p).is_file()) {
             return Err(format!("{kind}: {missing} is missing"));
         }
+        // Only what the token itself says is printed; the receipt is the operator's own
+        // file, and a time or state written there proves nothing.
         let detail = match kind {
             "rfc3161" => match paths.first().and_then(|p| token_imprint(&anchors.join(p))) {
-                None => "token present; openssl not found, its digest not checked".to_owned(),
-                Some(Ok(imprint)) if imprint == stem => format!(
-                    "the token is over this checkpoint, time {}",
-                    r.get("tsa_time")
-                        .and_then(Value::as_str)
-                        .unwrap_or("unknown")
+                None => return Err("rfc3161: openssl is needed to read the token".into()),
+                Some(Ok(t)) if t.imprint == stem => format!(
+                    "the token is over this checkpoint, stamped {}; the authority's signature is \
+                     not checked here, `openssl ts -verify` checks it with its certificate",
+                    t.time.as_deref().unwrap_or("at no time it states")
                 ),
-                Some(Ok(imprint)) => {
+                Some(Ok(t)) => {
                     return Err(format!(
-                        "rfc3161: the token is over {imprint}, not this checkpoint"
+                        "rfc3161: the token is over {}, not this checkpoint",
+                        t.imprint
                     ));
                 }
                 Some(Err(e)) => return Err(format!("rfc3161: {e}")),
             },
-            "opentimestamps" => format!(
-                "proof present, {}; `ots verify` checks it against Bitcoin",
-                r.get("state")
-                    .and_then(Value::as_str)
-                    .unwrap_or("state unknown")
-            ),
-            other => format!("{other}: token present, not a kind remit checks"),
+            "opentimestamps" => "proof present, not checked here; `ots verify` checks it \
+                                 against Bitcoin"
+                .to_owned(),
+            other => return Err(format!("{other}: not a kind of anchor remit knows")),
         };
         println!(
             "  size {:>6}  {}  {kind}: {detail}",
@@ -341,6 +351,12 @@ pub(crate) fn verify_anchors(dir: &Path, policy: &TrustPolicy) -> Result<()> {
     }
     if !problems.is_empty() {
         return Err(format!("anchors do not verify: {}", problems.join("; ")));
+    }
+    if kept.is_empty() {
+        return Err(format!(
+            "no anchored checkpoint in {}: nothing here shows what the history was before now",
+            anchors.display()
+        ));
     }
     println!(
         "  {} anchored checkpoint(s), all consistent with size {}{}",

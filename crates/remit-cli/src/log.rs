@@ -513,12 +513,21 @@ pub(crate) fn verify_logged(
     chain: &Path,
     proof: &Path,
 ) -> Result<remit_log::TrustedCheckpoint> {
+    verify_links_logged(policy, &read_chain(chain)?, proof)
+}
+
+/// As [`verify_logged`], for a chain already read: a caller that has checked these links
+/// proves the same links, not whatever the file holds by the time it is read again.
+pub(crate) fn verify_links_logged(
+    policy: &Path,
+    links: &[remit_core::SignedWarrant],
+    proof: &Path,
+) -> Result<remit_log::TrustedCheckpoint> {
     let policy = read_policy(policy)?;
-    let links = read_chain(chain)?;
     let text = std::fs::read_to_string(proof).map_err(|e| format!("{}: {e}", proof.display()))?;
     let proof = LoggedProof::parse(&text).map_err(|e| format!("{}: {e}", proof.display()))?;
     proof
-        .verify(&links, &policy)
+        .verify(links, &policy)
         .map_err(|e| format!("not logged: {e}"))
 }
 

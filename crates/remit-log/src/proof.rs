@@ -203,6 +203,13 @@ impl TrustPolicy {
         }
         let log = log.ok_or(ProofFileError::Malformed("no log key"))?;
         let quorum = quorum.ok_or(ProofFileError::Malformed("no quorum"))?;
+        // With no witness required, whoever holds the log's key can show each verifier its
+        // own history, and a rewrite past a proven entry goes unseen.
+        if quorum == 0 {
+            return Err(ProofFileError::Malformed(
+                "quorum 0: the log's own key would be trusted alone",
+            ));
+        }
         let mut distinct: Vec<Vec<u8>> = witnesses.iter().map(VerifierKey::public_key).collect();
         distinct.sort_unstable();
         distinct.dedup();

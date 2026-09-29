@@ -189,11 +189,11 @@ fn proof_files_have_one_form() {
 #[test]
 fn policies_have_one_form() {
     assert_eq!(TrustPolicy::parse(&policy_text(1)).unwrap().quorum, 1);
-    assert_eq!(TrustPolicy::parse(&policy_text(0)).unwrap().quorum, 0);
     let log = log_key().verifier_key().to_vkey();
     let witness = witness_key().verifier_key().to_vkey();
     for bad in [
         policy_text(2),                                  // more than the witnesses
+        policy_text(0),                                  // the log's key trusted alone
         format!("witness {witness}\nquorum 1\n"),        // no log
         format!("log {log}\nwitness {witness}\n"),       // no quorum
         format!("log {log}\nlog {log}\nquorum 0\n"),     // two logs

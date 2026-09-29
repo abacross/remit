@@ -47,7 +47,9 @@ pub(crate) struct McpArgs {
     /// The region for STS and for commands.
     #[arg(long)]
     region: Option<String>,
-    /// Programs `remit_run` may start, by name (for example `aws`); any, if none is given.
+    /// Programs `remit_run` may start, by name found on `PATH` (for example `aws`) or by
+    /// path; any, if none is given. Each is resolved once, when the server starts, to the
+    /// file it names, and only those files are run.
     #[arg(long = "allow")]
     allow: Vec<String>,
     /// Seconds a command may run before it is stopped.
@@ -269,29 +271,63 @@ pub(crate) fn cap(bytes: &[u8], max: usize) -> (String, bool) {
     (text.get(..end).unwrap_or_default().to_owned(), true)
 }
 
-/// Whether `program` is one of the allowed names; any program when none are listed.
-pub(crate) fn allowed(allow: &[String], program: &str) -> bool {
-    let name = Path::new(program)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or(program);
-    allow.is_empty() || allow.iter().any(|a| a == name)
+/// The file a program name or path runs: a path is taken as given, a bare name is looked
+/// up on `path` the way a shell would; either way the result is the canonical path, with
+/// every link resolved.
+pub(crate) fn resolve(program: &str, path: Option<&std::ffi::OsStr>) -> Option<PathBuf> {
+    use std::os::unix::fs::PermissionsExt as _;
+    let runnable = |p: &Path| {
+        std::fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+    };
+    let found = if program.contains('/') {
+        Some(PathBuf::from(program)).filter(|p| runnable(p))
+    } else {
+        std::env::split_paths(path?)
+            .map(|dir| dir.join(program))
+            .find(|p| runnable(p))
+    };
+    found.and_then(|p| std::fs::canonicalize(p).ok())
+}
+
+/// The allowed programs, resolved; `None` when any program may run.
+pub(crate) fn resolve_allowed(
+    allow: &[String],
+    path: Option<&std::ffi::OsStr>,
+) -> Result<Option<Vec<PathBuf>>> {
+    if allow.is_empty() {
+        return Ok(None);
+    }
+    allow
+        .iter()
+        .map(|a| resolve(a, path).ok_or_else(|| format!("--allow {a}: no such program")))
+        .collect::<Result<_>>()
+        .map(Some)
+}
+
+/// The file to run for `program`, if it is allowed: the resolved file itself, so what
+/// was checked is what runs, whatever a directory or `PATH` holds by then.
+pub(crate) fn permitted_program(
+    allowed: Option<&[PathBuf]>,
+    program: &str,
+    path: Option<&std::ffi::OsStr>,
+) -> Option<PathBuf> {
+    let file = resolve(program, path)?;
+    allowed
+        .is_none_or(|list| list.contains(&file))
+        .then_some(file)
 }
 
 struct Live {
     args: McpArgs,
+    allowed: Option<Vec<PathBuf>>,
 }
 
 impl Live {
     fn leaf_checked(&self) -> Result<(Vec<remit_core::SignedWarrant>, Result<String>)> {
         let chain = read_chain(&self.args.chain)?;
         verify_chain(&chain, &roots(&self.args.roots)?).map_err(|e| format!("refused: {e}"))?;
-        let logged = log::verify_logged(
-            &self.args.log_policy,
-            &self.args.chain,
-            &self.args.log_proof,
-        )
-        .map(|t| format!("{} at size {}", t.checkpoint.origin(), t.checkpoint.size()));
+        let logged = log::verify_links_logged(&self.args.log_policy, &chain, &self.args.log_proof)
+            .map(|t| format!("{} at size {}", t.checkpoint.origin(), t.checkpoint.size()));
         Ok((chain, logged))
     }
 }
@@ -326,12 +362,16 @@ impl Backend for Live {
 
     async fn run(&self, argv: &[String]) -> Result<Value> {
         let (program, rest) = argv.split_first().ok_or("argv is empty")?;
-        if !allowed(&self.args.allow, program) {
+        let Some(file) = permitted_program(
+            self.allowed.as_deref(),
+            program,
+            std::env::var_os("PATH").as_deref(),
+        ) else {
             return Err(format!(
                 "refused: {program} is not one of the programs this server may run ({})",
                 self.args.allow.join(", ")
             ));
-        }
+        };
         let session = open_session(&SessionArgs {
             chain: &self.args.chain,
             roots: &self.args.roots,
@@ -342,7 +382,7 @@ impl Backend for Live {
             region: self.args.region.as_deref(),
         })
         .await?;
-        let mut cmd = tokio::process::Command::new(program);
+        let mut cmd = tokio::process::Command::new(&file);
         cmd.args(rest)
             .stdin(std::process::Stdio::null())
             .kill_on_drop(true);
@@ -377,7 +417,8 @@ impl Backend for Live {
 
 /// Serves until standard input closes.
 pub(crate) async fn serve(args: McpArgs) -> Result<()> {
-    let backend = Live { args };
+    let allowed = resolve_allowed(&args.allow, std::env::var_os("PATH").as_deref())?;
+    let backend = Live { args, allowed };
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout();
     for line in stdin.lock().lines() {
@@ -531,10 +572,43 @@ mod tests {
     }
 
     #[test]
-    fn only_allowed_programs_run_when_a_list_is_given() {
-        assert!(allowed(&[], "anything"));
-        let allow = vec!["aws".to_owned()];
-        assert!(allowed(&allow, "aws") && allowed(&allow, "/usr/local/bin/aws"));
-        assert!(!allowed(&allow, "sh") && !allowed(&allow, "awsx"));
+    fn only_the_allowed_files_run_whatever_they_are_called() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = std::env::temp_dir().join(format!("remit-allow-{}", std::process::id()));
+        let (bin, evil) = (dir.join("bin"), dir.join("evil"));
+        for d in [&bin, &evil] {
+            std::fs::create_dir_all(d).unwrap();
+            let f = d.join("aws");
+            std::fs::write(&f, "#!/bin/sh\n").unwrap();
+            std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        std::os::unix::fs::symlink(bin.join("aws"), bin.join("aws-link")).unwrap();
+        let path = std::ffi::OsString::from(bin.as_os_str());
+        let path = Some(path.as_os_str());
+        let allowed = resolve_allowed(&["aws".to_owned()], path).unwrap().unwrap();
+        let real = std::fs::canonicalize(bin.join("aws")).unwrap();
+
+        assert_eq!(
+            permitted_program(Some(&allowed), "aws", path),
+            Some(real.clone())
+        );
+        let by_path = bin.join("aws");
+        assert!(permitted_program(Some(&allowed), by_path.to_str().unwrap(), path).is_some());
+        // Another file with the same name, and a link to the allowed one under another name.
+        let other = evil.join("aws");
+        assert_eq!(
+            permitted_program(Some(&allowed), other.to_str().unwrap(), path),
+            None
+        );
+        assert_eq!(
+            permitted_program(Some(&allowed), "aws-link", path),
+            Some(real)
+        );
+        assert_eq!(permitted_program(Some(&allowed), "sh", path), None);
+        // No list: anything that exists runs; nothing that does not.
+        assert!(permitted_program(None, other.to_str().unwrap(), path).is_some());
+        assert_eq!(permitted_program(None, "no-such-program", path), None);
+        assert!(resolve_allowed(&["no-such-program".to_owned()], path).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

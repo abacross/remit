@@ -25,6 +25,9 @@ pub enum Escape {
     ResourcePolicy,
     /// Changes code or commands that run later under another identity.
     RunsLater,
+    /// Returns a credential that acts outside the session and its record: a password, a
+    /// token, a secret.
+    OutsideTheRecord,
 }
 
 impl Escape {
@@ -37,6 +40,7 @@ impl Escape {
             Self::WidensIam => "widens what an IAM principal may do",
             Self::ResourcePolicy => "changes a resource policy, which can admit others",
             Self::RunsLater => "changes what runs later under another identity",
+            Self::OutsideTheRecord => "returns a credential that acts outside the session",
         }
     }
 }
@@ -85,6 +89,25 @@ pub const ESCAPES: &[(&str, Escape)] = &[
     ("ssm:SendCommand", Escape::RunsLater),
     ("ssm:StartSession", Escape::RunsLater),
     ("ec2-instance-connect:SendSSHPublicKey", Escape::RunsLater),
+    ("ec2:GetPasswordData", Escape::OutsideTheRecord),
+    (
+        "lightsail:GetInstanceAccessDetails",
+        Escape::OutsideTheRecord,
+    ),
+    ("lightsail:DownloadDefaultKeyPair", Escape::OutsideTheRecord),
+    ("ecr:GetAuthorizationToken", Escape::OutsideTheRecord),
+    (
+        "codeartifact:GetAuthorizationToken",
+        Escape::OutsideTheRecord,
+    ),
+    ("sts:GetServiceBearerToken", Escape::OutsideTheRecord),
+    ("rds-db:connect", Escape::OutsideTheRecord),
+    ("redshift:GetClusterCredentials", Escape::OutsideTheRecord),
+    (
+        "redshift-serverless:GetCredentials",
+        Escape::OutsideTheRecord,
+    ),
+    ("secretsmanager:GetSecretValue", Escape::OutsideTheRecord),
 ];
 
 /// Every known escape a warrant's grants reach, as (grant index, action, why), in grant

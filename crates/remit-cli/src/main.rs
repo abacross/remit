@@ -459,7 +459,7 @@ pub(crate) async fn open_session(a: &SessionArgs<'_>) -> Result<Session> {
     let chain = read_chain(a.chain)?;
     let plan = remit_broker::plan(&chain, &roots(a.roots)?, now(), a.role_max_seconds)
         .map_err(|e| format!("refused: {e}"))?;
-    let logged = log::verify_logged(a.log_policy, a.chain, a.log_proof)
+    let logged = log::verify_links_logged(a.log_policy, &chain, a.log_proof)
         .map_err(|e| format!("refused: {e}"))?;
     // A machine with no configured region is common; STS still needs one, and the command
     // should run in the same one (found on the first live session, 2026-09-24).
