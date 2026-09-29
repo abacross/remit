@@ -877,6 +877,29 @@ fn verify_report(report: &Path, signature: &Path, key_id: &str) -> Result<()> {
         field(&parsed, "to"),
         field(&parsed, "regions")
     );
+    // Everything the verdict was qualified by, so a reader weighs it, not only reads it.
+    println!(
+        "  from {}, settling period {} s, run at {}",
+        field(&parsed, "source"),
+        field(&parsed, "settle_seconds"),
+        field(&parsed, "run_at")
+    );
+    println!("  roles (trust policy held): {}", field(&parsed, "roles"));
+    println!("  inputs refused: {}", field(&parsed, "refused_inputs"));
+    let mut kinds = std::collections::BTreeMap::<String, u64>::new();
+    for f in field(&parsed, "findings").as_array().into_iter().flatten() {
+        let kind = field(f, "kind").as_str().unwrap_or("?").to_owned();
+        let n = kinds.entry(kind).or_insert(0);
+        *n = n.saturating_add(1);
+    }
+    println!("  findings by kind: {kinds:?}");
+    println!(
+        "  made on a session's behalf: {}; unmanaged principals: {}",
+        field(&parsed, "on_behalf"),
+        field(&parsed, "unmanaged")
+            .as_object()
+            .map_or(0, serde_json::Map::len)
+    );
     Ok(())
 }
 
