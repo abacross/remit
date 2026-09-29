@@ -14,9 +14,8 @@ AWSTemplateFormatVersion: "2010-09-09"
 Description: Remit broker role, read-only ceiling (Remit ADR 0006)
 Parameters:
   BrokerPrincipalArn:
-    Type: String
-    Description: The IAM principal the broker runs as; the only principal that may assume this role.
-    AllowedPattern: "arn:aws:iam::[0-9]{12}:(user|role)/.+"
+    Type: CommaDelimitedList
+    Description: The IAM principal the broker runs as, the only principal that may assume this role; two, separated by a comma, while moving from one broker to another (the broker service's role, SPEC 8.4).
   RoleName:
     Type: String
     Default: remit-agent-readonly
