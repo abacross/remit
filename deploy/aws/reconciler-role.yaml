@@ -1,0 +1,102 @@
+# A read-only role for a reconciler that runs in GitHub Actions (deploy/github/reconcile.yml),
+# assumed with GitHub's OIDC token: no AWS key exists for it anywhere.
+#
+# The reconciler must run where the agents it judges cannot reach it: its binary, its trust
+# anchors and its key (THREAT-MODEL, known gaps 10 and 11). A job in a repository the agents'
+# identities cannot write, with this role, is such a place.
+#
+#   aws cloudformation deploy --stack-name remit-reconciler --template-file deploy/aws/reconciler-role.yaml \
+#     --capabilities CAPABILITY_NAMED_IAM --parameter-overrides \
+#       GitHubRepository=<owner/name> ManagedRoleArns=<role arn,...> [TrailBucket=<bucket>] \
+#       [CreateOidcProvider=false if the account already has GitHub's provider]
+#
+# Reverse: delete the stack.
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Remit reconciler, read-only, assumed from GitHub Actions with OIDC
+Parameters:
+  GitHubRepository:
+    Type: String
+    Description: The repository whose workflow may assume this role, as owner/name.
+    AllowedPattern: "[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"
+  Branch:
+    Type: String
+    Default: main
+    Description: Only workflows run from this branch may assume the role.
+  ManagedRoleArns:
+    Type: CommaDelimitedList
+    Description: The managed roles whose trust policies the reconciler reads.
+  TrailBucket:
+    Type: String
+    Default: ""
+    Description: The trail's S3 bucket, to reconcile from validated log files; empty for event history only.
+  CreateOidcProvider:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+  RoleName:
+    Type: String
+    Default: remit-reconciler
+Conditions:
+  CreateProvider: !Equals [!Ref CreateOidcProvider, "true"]
+  ReadsTrail: !Not [!Equals [!Ref TrailBucket, ""]]
+Resources:
+  GitHubProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: CreateProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList: [sts.amazonaws.com]
+  Reconciler:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Ref RoleName
+      Description: Reads what Remit's reconciler needs; assumed only by one repository's workflow on one branch.
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:sub: !Sub repo:${GitHubRepository}:ref:refs/heads/${Branch}
+      Policies:
+        - PolicyName: read-the-record
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: TheRecordAndItsKeys
+                Effect: Allow
+                Action:
+                  - cloudtrail:LookupEvents
+                  - cloudtrail:ListPublicKeys
+                  - cloudtrail:DescribeTrails
+                  - cloudtrail:GetTrailStatus
+                  - cloudtrail:GetEventSelectors
+                Resource: "*"
+              - Sid: TheManagedRolesTrustPolicies
+                Effect: Allow
+                Action: iam:GetRole
+                Resource: !Ref ManagedRoleArns
+        - !If
+          - ReadsTrail
+          - PolicyName: read-the-trail-files
+            PolicyDocument:
+              Version: "2012-10-17"
+              Statement:
+                - Effect: Allow
+                  Action: s3:ListBucket
+                  Resource: !Sub arn:${AWS::Partition}:s3:::${TrailBucket}
+                - Effect: Allow
+                  Action: s3:GetObject
+                  Resource: !Sub arn:${AWS::Partition}:s3:::${TrailBucket}/AWSLogs/*
+          - !Ref AWS::NoValue
+      Tags:
+        - { Key: managed-by, Value: remit }
+Outputs:
+  RoleArn:
+    Description: The role the workflow assumes (repository variable REMIT_AWS_ROLE).
+    Value: !GetAtt Reconciler.Arn

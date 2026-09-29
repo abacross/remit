@@ -128,12 +128,14 @@ struct ReconcileArgs {
     settle_seconds: u64,
     /// A local copy of the trail's S3 bucket (its `AWSLogs/...` keys as paths): events come
     /// from validated log files instead of event history (SPEC 6.7).
-    #[arg(long, requires_all = ["trail_bucket", "trail_keys", "trail_signatures"])]
+    #[arg(long, requires_all = ["trail_bucket", "trail_signatures"])]
     trail_dir: Option<PathBuf>,
     /// The bucket the copy was taken from, as its digests record it.
     #[arg(long)]
     trail_bucket: Option<String>,
-    /// CloudTrail's public keys: the JSON of `aws cloudtrail list-public-keys`.
+    /// CloudTrail's public keys, as the JSON of `aws cloudtrail list-public-keys`. Without
+    /// it, the run asks CloudTrail for them itself, which is the one to prefer: a keys file
+    /// is whatever whoever started the run chose (THREAT-MODEL, crossing X12).
     #[arg(long)]
     trail_keys: Option<PathBuf>,
     /// The newest digests' signatures from their S3 metadata: a JSON object mapping each
@@ -805,14 +807,15 @@ async fn gather_events(
     let mut seen = std::collections::BTreeSet::new();
     let mut record_problems = Vec::new();
     let mut coverage = Vec::new();
-    let source = if let (Some(dir), Some(bucket), Some(keys), Some(sigs)) = (
-        &args.trail_dir,
-        &args.trail_bucket,
-        &args.trail_keys,
-        &args.trail_signatures,
-    ) {
+    let source = if let (Some(dir), Some(bucket), Some(sigs)) =
+        (&args.trail_dir, &args.trail_bucket, &args.trail_signatures)
+    {
         // Delivered from the window's start to its end plus the settling period.
         let need_to = to.saturating_add(args.settle_seconds);
+        let keys = match &args.trail_keys {
+            Some(file) => trail::keys_from_file(file)?,
+            None => trail::fetch_keys(config, &args.regions, earlier_from, need_to).await?,
+        };
         let local = trail::load(dir, bucket, keys, sigs)?;
         let v = remit_reconcile::trail::validate(
             &local.digests,

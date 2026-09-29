@@ -47,13 +47,8 @@ fn walk(dir: &Path, root: &Path, out: &mut Vec<(String, std::path::PathBuf)>) ->
     Ok(())
 }
 
-/// Reads digests, log files, public keys and the newest digests' signatures.
-pub(crate) fn load(dir: &Path, bucket: &str, keys: &Path, signatures: &Path) -> Result<Local> {
-    let sigs: HashMap<String, String> = serde_json::from_str(
-        &std::fs::read_to_string(signatures)
-            .map_err(|e| format!("{}: {e}", signatures.display()))?,
-    )
-    .map_err(|e| format!("{}: {e}", signatures.display()))?;
+/// CloudTrail's public keys from the JSON `aws cloudtrail list-public-keys` prints.
+pub(crate) fn keys_from_file(keys: &Path) -> Result<Vec<TrailKey>> {
     let key_json: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(keys).map_err(|e| format!("{}: {e}", keys.display()))?,
     )
@@ -76,6 +71,80 @@ pub(crate) fn load(dir: &Path, bucket: &str, keys: &Path, signatures: &Path) -> 
             der,
         });
     }
+    Ok(trail_keys)
+}
+
+/// CloudTrail's public keys for `[from, to]`, asked of CloudTrail itself in each region
+/// with the run's own credentials: what vouches for the record comes from AWS, not from
+/// whoever started the run (THREAT-MODEL, crossing X12).
+pub(crate) async fn fetch_keys(
+    config: &aws_config::SdkConfig,
+    regions: &[String],
+    from: u64,
+    to: u64,
+) -> Result<Vec<TrailKey>> {
+    let mut keys: Vec<TrailKey> = Vec::new();
+    for region in regions {
+        let regional = config
+            .to_builder()
+            .region(aws_config::Region::new(region.clone()))
+            .build();
+        let client = aws_sdk_cloudtrail::Client::new(&regional);
+        let at = |t: u64| {
+            aws_sdk_cloudtrail::primitives::DateTime::from_secs(i64::try_from(t).unwrap_or(0))
+        };
+        let mut token: Option<String> = None;
+        loop {
+            let page = client
+                .list_public_keys()
+                .start_time(at(from))
+                .end_time(at(to))
+                .set_next_token(token.clone())
+                .send()
+                .await
+                .map_err(|e| {
+                    format!(
+                        "{region}: list-public-keys: {}",
+                        aws_sdk_cloudtrail::error::DisplayErrorContext(&e)
+                    )
+                })?;
+            for k in page.public_key_list() {
+                let (Some(fp), Some(value)) = (k.fingerprint(), k.value()) else {
+                    return Err(format!(
+                        "{region}: a public key without fingerprint or value"
+                    ));
+                };
+                if !keys.iter().any(|have| have.fingerprint == fp) {
+                    keys.push(TrailKey {
+                        fingerprint: fp.to_owned(),
+                        der: value.as_ref().to_vec(),
+                    });
+                }
+            }
+            token = page.next_token().map(str::to_owned);
+            if token.is_none() {
+                break;
+            }
+        }
+    }
+    if keys.is_empty() {
+        return Err("CloudTrail returned no public keys for the window".into());
+    }
+    Ok(keys)
+}
+
+/// Reads digests, log files and the newest digests' signatures; the public keys are given.
+pub(crate) fn load(
+    dir: &Path,
+    bucket: &str,
+    keys: Vec<TrailKey>,
+    signatures: &Path,
+) -> Result<Local> {
+    let sigs: HashMap<String, String> = serde_json::from_str(
+        &std::fs::read_to_string(signatures)
+            .map_err(|e| format!("{}: {e}", signatures.display()))?,
+    )
+    .map_err(|e| format!("{}: {e}", signatures.display()))?;
     let mut files = Vec::new();
     walk(dir, dir, &mut files)?;
     let mut digests = Vec::new();
@@ -96,6 +165,6 @@ pub(crate) fn load(dir: &Path, bucket: &str, keys: &Path, signatures: &Path) -> 
     Ok(Local {
         digests,
         logs,
-        keys: trail_keys,
+        keys,
     })
 }

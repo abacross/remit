@@ -1,0 +1,86 @@
+# Reconcile every day, somewhere the agents cannot reach (THREAT-MODEL, known gaps 10 and 11).
+#
+# Copy this file to .github/workflows/ in a private repository that no agent's identity can
+# write, with the trust anchors beside it (deploy/github/README.md). It downloads a Remit
+# release and checks its checksum and signed provenance before running it, reads what it
+# trusts only from this repository, reaches AWS through a read-only role assumed with
+# GitHub's OIDC token (deploy/aws/reconciler-role.yaml; no AWS key exists), signs the result
+# with a key kept in this repository's secrets, and commits it. An incomplete result fails
+# the job, after the result is committed.
+name: reconcile
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+permissions:
+  contents: write
+  id-token: write
+concurrency: reconcile
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    env:
+      REMIT_VERSION: ${{ vars.REMIT_VERSION }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: remit, checked before it is run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          asset="remit-${REMIT_VERSION}-x86_64-unknown-linux-musl.tar.gz"
+          cd "$RUNNER_TEMP"
+          gh release download "$REMIT_VERSION" --repo abacross/remit --pattern "$asset" --pattern SHA256SUMS
+          grep " ${asset}\$" SHA256SUMS | sha256sum -c -
+          gh attestation verify "$asset" --repo abacross/remit
+          tar xzf "$asset"
+          sudo install -m 755 "${asset%.tar.gz}/remit" /usr/local/bin/remit
+          remit --version
+      - name: the public log, as served
+        run: git clone --depth 1 "${{ vars.REMIT_LOG_REPOSITORY }}" "$RUNNER_TEMP/log"
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.REMIT_AWS_ROLE }}
+          aws-region: us-east-1
+      - name: reconcile yesterday
+        id: run
+        env:
+          RECONCILER_KEY: ${{ secrets.REMIT_RECONCILER_KEY }}
+          ROLES: ${{ vars.REMIT_ROLES }}
+          BROKERS: ${{ vars.REMIT_BROKERS }}
+          REGIONS: ${{ vars.REMIT_REGIONS }}
+        run: |
+          set -euo pipefail
+          umask 077
+          printf '%s\n' "$RECONCILER_KEY" > "$RUNNER_TEMP/reconciler.key"
+          from=$(date -u -d 'yesterday 00:00' +%FT%TZ)
+          to=$(date -u -d 'today 00:00' +%FT%TZ)
+          args=()
+          for r in $ROLES; do args+=(--role "$r"); done
+          for b in $BROKERS; do args+=(--broker "$b"); done
+          for g in $REGIONS; do args+=(--region "$g"); done
+          while read -r root; do [ -n "${root%%#*}" ] && args+=(--root "$root"); done < trust/roots.txt
+          mkdir -p reports
+          out="reports/${from%%T*}.json"
+          set +e
+          remit reconcile --log-dir "$RUNNER_TEMP/log" --log-policy trust/log.policy "${args[@]}" \
+            --from "$from" --to "$to" --key "$RUNNER_TEMP/reconciler.key" --out "$out" > /dev/null
+          status=$?
+          set -e
+          rm -f "$RUNNER_TEMP/reconciler.key"
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          echo "out=$out" >> "$GITHUB_OUTPUT"
+      - name: keep the signed result
+        if: always() && steps.run.outputs.out != ''
+        run: |
+          set -euo pipefail
+          git config user.name "remit reconciler"
+          git config user.email "reconciler@users.noreply.github.com"
+          git add reports/
+          git commit -m "Reconciliation of ${{ steps.run.outputs.out }}" || exit 0
+          git push
+      - name: an incomplete result fails the job
+        if: steps.run.outputs.status != '0'
+        run: |
+          echo "remit reconcile exited ${{ steps.run.outputs.status }}: see ${{ steps.run.outputs.out }}" >&2
+          exit 1
