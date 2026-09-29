@@ -28,20 +28,56 @@ A false `complete` is the worst failure Remit can have, worse than an outage, be
 
 ## Trust boundaries
 
-```
- person with the issuing key ──signs──▶ warrant ──appended──▶ log ◀──cosign── witnesses
-                                            │                   │
-                                            ▼                   ▼ proof
- agent ──asks──▶ remit run / remit mcp ──checks chain and proof──┘
-                        │
-                        │ broker credentials: AssumeRole(role, SourceIdentity = warrant id,
-                        │                                session policy = the warrant)
-                        ▼
-                 AWS STS ──session──▶ the command the agent asked for ──calls──▶ AWS
-                                                                               │
- reconciler ◀──────────────── CloudTrail (event history, or validated trail) ◀──┘
-     │
-     └──signed result──▶ log, and whoever verifies it
+Each box drawn around a group is a trust boundary; arrows are the data flow, numbered in order; `[n]` is the component's section below.
+The two items marked **gap** are where the default setup puts something on the agent's side of a boundary.
+
+```mermaid
+flowchart TB
+  subgraph P["Person with the issuing key"]
+    W["Signs a warrant [1][2]"]
+    AP["Model approver, only inside a person's bound [3]"]
+  end
+  subgraph L["Public log, run by other parties"]
+    LOG["Log: checkpoints, warrants, results [4]"]
+    WIT["Witnesses cosign"]
+    ANC["Anchors: timestamp authority, Bitcoin"]
+  end
+  subgraph H["Agent's machine, the agent's user"]
+    AG["Agent"]
+    RUN["remit run / remit mcp, hook as a guide rail [6]"]
+    ST[".remit/ state [10]"]
+    BK["Broker key: gap 3"]
+    IK["Issuing key file: gap 6"]
+  end
+  subgraph A["AWS account"]
+    STS["STS: trust policy admits the broker only [5]"]
+    SES["Session on a managed role, policy = the warrant"]
+    SVC["AWS services"]
+    CT["CloudTrail [7]"]
+  end
+  subgraph R["Reconciler and verifiers"]
+    REC["remit reconcile [7]"]
+    RES["Signed result, verify-report [8]"]
+  end
+  subgraph B["Releases"]
+    REL["Release build: sums, provenance, SBOM [9]"]
+  end
+  W -- "1 warrant appended" --> LOG
+  AP --> LOG
+  LOG --> WIT
+  LOG --> ANC
+  LOG -- "2 proof it is logged" --> RUN
+  AG --> RUN
+  BK -.-> RUN
+  RUN -- "3 AssumeRole: warrant id, session policy" --> STS
+  STS -- "4 session" --> SES
+  SES -- "5 calls" --> SVC
+  SES --> CT
+  SVC --> CT
+  CT -- "6 events" --> REC
+  LOG -- "7 logged warrants" --> REC
+  REC -- "8 signed result, appended to the log" --> RES
+  REL -. "installs remit" .-> RUN
 ```
 
 The boundaries that matter are between the agent and three things it must not hold: the issuing key, the broker's credentials, and the log's and witnesses' keys.
