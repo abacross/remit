@@ -70,6 +70,11 @@ pub struct Input<'a> {
     pub regions: &'a [String],
     /// Problems found validating the record itself (SPEC 6.7): each fails the run.
     pub record_problems: &'a [String],
+    /// The broker principals' ARNs: the only callers that may create a managed session.
+    pub brokers: &'a [String],
+    /// Session creations from before `from`, back as far as a session can last, so that a
+    /// session already open when the window starts is joined to its creation.
+    pub earlier: &'a [Event],
 }
 
 /// What kind of finding (SPEC sections 6.2 and 6.3).
@@ -82,6 +87,9 @@ pub enum Kind {
     UnwarrantedEvent,
     /// A managed action outside its warrant's window.
     OutOfWindowEvent,
+    /// A managed action by a session whose creation the run did not see and check, so
+    /// nothing shows the broker made it under its warrant's policy.
+    UnseenSession,
     /// A managed action the cross-check finds outside its warrant.
     OutsideWarrantEvent,
     /// A managed role whose trust policy does not require a warrant identity.
@@ -181,10 +189,9 @@ pub struct Report {
     /// counted so that its coverage is visible. An AWS service acting as itself is named
     /// `AWSService:<service>`.
     pub unmanaged: BTreeMap<String, u64>,
-    /// Calls an AWS service made for a managed session, which `CloudTrail` records without
-    /// the session's source identity: per service. Outside the claim (SPEC section 6,
-    /// assumption 4), and counted so that it is seen.
-    pub on_behalf: BTreeMap<String, u64>,
+    /// Calls an AWS service made for a managed session, per service and action: outside the
+    /// claim (SPEC section 6, assumption 4), and counted so that they are seen.
+    pub on_behalf: BTreeMap<String, BTreeMap<String, u64>>,
     /// Events considered in total.
     pub events: u64,
 }
@@ -213,7 +220,11 @@ pub fn reconcile(input: &Input<'_>) -> Report {
         .iter()
         .map(|w| (w.id().as_str().to_owned(), w))
         .collect();
-    let managed: BTreeSet<&str> = input.roles.iter().map(|r| r.arn.as_str()).collect();
+    let managed: BTreeSet<String> = input
+        .roles
+        .iter()
+        .map(|r| r.arn.to_ascii_lowercase())
+        .collect();
     let mut findings = Vec::new();
     let mut actions = BTreeMap::new();
     let mut by_action = BTreeMap::new();
@@ -237,46 +248,43 @@ pub fn reconcile(input: &Input<'_>) -> Report {
         add(Kind::RecordGap, "cloud record", p.clone());
     }
 
-    for e in input.events {
-        let is_session_creation = e.source == "sts.amazonaws.com"
-            && e.name == "AssumeRole"
-            && e.param("roleArn").is_some_and(|r| managed.contains(r));
-        let is_managed_action = e.identity_type == "AssumedRole"
-            && e.session_issuer_arn
-                .as_deref()
-                .is_some_and(|r| managed.contains(r));
+    let seen_keys = check_sessions(input, &managed, &by_id, &mut sessions, &mut add);
 
-        if is_session_creation {
-            check_session(e, &by_id, &mut sessions, &mut add);
-        } else if is_managed_action {
-            match (&e.source_identity, &e.invoked_by) {
-                // A service acting for the session: AWS enforced the session's own
-                // permissions, but the record does not say which warrant it served.
-                (None, Some(service)) => increment(&mut on_behalf, service),
-                _ => check_action(e, &by_id, &mut actions, &mut by_action, &mut add),
+    for e in input.events {
+        match classify(e, &managed) {
+            Class::Creation => continue,
+            Class::Unmanaged(who) => {
+                increment(&mut unmanaged, &who);
+                continue;
             }
-        } else {
-            let who = match (&e.identity_arn, &e.invoked_by) {
-                (Some(arn), _) => arn.clone(),
-                (None, Some(service)) => format!("{}:{service}", e.identity_type),
-                (None, None) => e.identity_type.clone(),
-            };
-            increment(&mut unmanaged, &who);
+            Class::OnBehalf(service) => {
+                increment(
+                    on_behalf.entry(service.to_owned()).or_default(),
+                    &e.action(),
+                );
+                continue;
+            }
+            Class::Managed => {}
         }
+        if !e
+            .access_key_id
+            .as_deref()
+            .is_some_and(|k| seen_keys.contains(k))
+        {
+            add(
+                Kind::UnseenSession,
+                &e.id,
+                format!(
+                    "{} by a session whose creation is not in the record",
+                    e.action()
+                ),
+            );
+        }
+        check_action(e, &by_id, &mut actions, &mut by_action, &mut add);
     }
 
     findings.sort();
-    let failed = findings.iter().any(|f| f.kind.fails_the_run());
-    let settled = input.to.saturating_add(input.settle_seconds) <= input.now;
-    let verdict = if failed {
-        Verdict::Incomplete
-    } else if !settled {
-        Verdict::Provisional
-    } else if input.source == EventSource::EventHistory {
-        Verdict::CompleteUnvalidated
-    } else {
-        Verdict::Complete
-    };
+    let verdict = verdict(input, &findings);
     Report {
         format: "remit-reconciliation/1",
         from: remit_aws::iso8601(input.from),
@@ -304,12 +312,183 @@ pub fn reconcile(input: &Input<'_>) -> Report {
     }
 }
 
-fn check_session(
-    e: &Event,
+/// The verdict for these findings (SPEC 6.4).
+fn verdict(input: &Input<'_>, findings: &[Finding]) -> Verdict {
+    let settled = input.to.saturating_add(input.settle_seconds) <= input.now;
+    if findings.iter().any(|f| f.kind.fails_the_run()) {
+        Verdict::Incomplete
+    } else if !settled {
+        Verdict::Provisional
+    } else if input.source == EventSource::EventHistory {
+        Verdict::CompleteUnvalidated
+    } else {
+        Verdict::Complete
+    }
+}
+
+/// Checks every session creation a managed action may join to, and returns the keys
+/// their sessions' calls carry. A creation from before the window is checked only if the
+/// window uses it.
+fn check_sessions(
+    input: &Input<'_>,
+    managed: &BTreeSet<String>,
     by_id: &BTreeMap<String, &Warrant>,
     sessions: &mut BTreeMap<String, u64>,
     add: &mut impl FnMut(Kind, &str, String),
+) -> BTreeSet<String> {
+    let used: BTreeSet<&str> = input
+        .events
+        .iter()
+        .filter_map(|e| e.access_key_id.as_deref())
+        .collect();
+    let earlier = input
+        .earlier
+        .iter()
+        .filter(|e| e.created_key.as_deref().is_some_and(|k| used.contains(k)));
+    let mut seen = BTreeSet::new();
+    for e in earlier.chain(input.events) {
+        if creates_managed_session(e, managed) {
+            check_session(e, by_id, input.brokers, sessions, add);
+            seen.extend(e.created_key.clone());
+        }
+    }
+    seen
+}
+
+/// Which class of SPEC 6.2 an event is in.
+enum Class<'e> {
+    /// A session creation on a managed role, checked on its own.
+    Creation,
+    /// A managed action.
+    Managed,
+    /// A call a service made for a managed session, as a consequence of a call the session
+    /// made and the cross-check judged; it carries a key of the service's, not the session's.
+    OnBehalf(&'e str),
+    /// Activity by a principal Remit does not manage, named.
+    Unmanaged(String),
+}
+
+fn classify<'e>(e: &'e Event, managed: &BTreeSet<String>) -> Class<'e> {
+    if creates_managed_session(e, managed) {
+        return Class::Creation;
+    }
+    let managed_role = e.identity_type == "AssumedRole"
+        && e.session_issuer_arn
+            .as_deref()
+            .is_some_and(|r| managed.contains(&r.to_ascii_lowercase()));
+    // AWS carries a source identity through role chaining, so a warrant's identifier on a
+    // session of any role is the warrant's work, whatever role it reached.
+    let warrant_shaped = e
+        .source_identity
+        .as_deref()
+        .is_some_and(|si| si.starts_with("rw1-"));
+    if !managed_role && !warrant_shaped {
+        return Class::Unmanaged(match (&e.identity_arn, &e.invoked_by) {
+            (Some(arn), _) => arn.clone(),
+            (None, Some(service)) => format!("{}:{service}", e.identity_type),
+            (None, None) => e.identity_type.clone(),
+        });
+    }
+    e.made_by_service().map_or(Class::Managed, Class::OnBehalf)
+}
+
+/// The parameters the broker passes to `AssumeRole`, and no others (SPEC 8.2).
+const BROKER_PARAMETERS: [&str; 5] = [
+    "durationSeconds",
+    "policy",
+    "roleArn",
+    "roleSessionName",
+    "sourceIdentity",
+];
+
+/// Whether an event creates a session on a managed role. The role is taken from what AWS
+/// recorded as the resource and the assumed-role user, and from the requested ARN, any of
+/// which is enough: a request that spells the ARN differently still names the role.
+fn creates_managed_session(e: &Event, managed: &BTreeSet<String>) -> bool {
+    if e.source != "sts.amazonaws.com" || !e.name.starts_with("AssumeRole") {
+        return false;
+    }
+    let named = |arn: &str| managed.contains(&arn.to_ascii_lowercase());
+    e.role_resources.iter().any(|r| named(r))
+        || e.param("roleArn").is_some_and(named)
+        || e.assumed_role_user
+            .as_deref()
+            .and_then(role_of_assumed_user)
+            .is_some_and(|r| named(&r))
+}
+
+/// `arn:aws:sts::A:assumed-role/NAME/SESSION` as the role `arn:aws:iam::A:role/NAME`. The
+/// assumed-role ARN drops the role's path, so a role with a path is recognized by its
+/// resource or requested ARN instead.
+fn role_of_assumed_user(arn: &str) -> Option<String> {
+    let rest = arn.strip_prefix("arn:")?;
+    let (partition, rest) = rest.split_once(':')?;
+    let rest = rest.strip_prefix("sts::")?;
+    let (account, rest) = rest.split_once(':')?;
+    let rest = rest.strip_prefix("assumed-role/")?;
+    let (name, _session) = rest.split_once('/')?;
+    Some(format!("arn:{partition}:iam::{account}:role/{name}"))
+}
+
+/// Who created the session, how, and with what: only a broker, only `AssumeRole`, and only
+/// the parameters the broker passes.
+fn check_origin(e: &Event, brokers: &[String], add: &mut impl FnMut(Kind, &str, String)) {
+    if e.name != "AssumeRole" {
+        add(
+            Kind::SessionMismatch,
+            &e.id,
+            format!(
+                "session created by {}, which the broker never calls",
+                e.name
+            ),
+        );
+    }
+    let caller = e.identity_arn.as_deref().unwrap_or(&e.identity_type);
+    if !brokers.iter().any(|b| b == caller) {
+        add(
+            Kind::SessionMismatch,
+            &e.id,
+            format!("session created by {caller}, which is not a broker"),
+        );
+    }
+    let extra: Vec<&str> = e
+        .request_parameters
+        .as_object()
+        .map(|o| {
+            o.keys()
+                .map(String::as_str)
+                .filter(|k| !BROKER_PARAMETERS.contains(k))
+                .collect()
+        })
+        .unwrap_or_default();
+    if !extra.is_empty() {
+        add(
+            Kind::SessionMismatch,
+            &e.id,
+            format!(
+                "session created with {}, which the broker never passes",
+                extra.join(", ")
+            ),
+        );
+    }
+}
+
+fn check_session(
+    e: &Event,
+    by_id: &BTreeMap<String, &Warrant>,
+    brokers: &[String],
+    sessions: &mut BTreeMap<String, u64>,
+    add: &mut impl FnMut(Kind, &str, String),
 ) {
+    if let Some(code) = &e.error_code {
+        add(
+            Kind::RefusedAttempt,
+            &e.id,
+            format!("{} refused: {code}", e.action()),
+        );
+        return;
+    }
+    check_origin(e, brokers, add);
     let Some(si) = e.param("sourceIdentity") else {
         add(
             Kind::SessionMismatch,
@@ -441,6 +620,17 @@ fn check_action(
     // so one fault is reported once.
     let at = e.time.clamp(w.not_before(), w.not_after());
     for resource in &e.resources {
+        // An S3 object event may also list the object's bucket, which is where the object
+        // is, not something the call was authorized on.
+        let container = e.source == "s3.amazonaws.com"
+            && e.resources.iter().any(|other| {
+                other
+                    .strip_prefix(resource.as_str())
+                    .is_some_and(|rest| rest.starts_with('/'))
+            });
+        if container {
+            continue;
+        }
         let permitted = authorizing
             .iter()
             .any(|action| Request::new(subject, action, resource, at).is_ok_and(|r| w.permits(&r)));

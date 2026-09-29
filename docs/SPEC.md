@@ -224,33 +224,40 @@ The claim is only as strong as its assumptions, which are part of the claim and 
 A reconciliation run takes:
 
 1. the warrants it may join to: those the log establishes at a checkpoint the reconciler's trust policy accepts, each with a chain rebuilt from logged entries that verifies against the trusted roots (sections 5.3 and 9.4); a logged warrant whose chain does not verify is not a warrant for this run and is reported;
-2. the managed roles: the role ARNs the broker assumes, and each role's trust policy as observed at the time of the run;
+2. the managed roles: the role ARNs the broker assumes, and each role's trust policy as observed at the time of the run; and the broker principals, the only callers that may create a session on them;
 3. the provider's events for a window `[from, to]`, from **every region** the account uses, and a statement of where they came from and what evidence of their integrity exists. CloudTrail files an event under the region that served it, not the caller's: in the first live session, a refused S3 call on a bucket in us-west-2 was recorded there, while the session's other calls were recorded in us-east-1 (conformance/RESULTS.md). A run that covered fewer regions names the ones it covered, and its verdict speaks for those regions only;
-4. the time of the run.
+4. the session creations from before `from`, back as far as the longest session a managed role allows, so that a session already open when the window starts is joined to its creation;
+5. the time of the run.
 
 ### 6.2 Classifying events
 
 Every event in the window is in exactly one class.
 
-**A session creation** is an event with source `sts.amazonaws.com`, name `AssumeRole`, and a `roleArn` that is a managed role.
-It must satisfy all of:
+**A session creation** is an event with source `sts.amazonaws.com`, a name beginning `AssumeRole`, and a managed role as its role.
+The role is what AWS recorded, the `AWS::IAM::Role` resource or the role of `responseElements.assumedRoleUser`, as well as the requested `roleArn`, compared without regard to case; any of them naming a managed role is enough, so a request that spells the ARN differently is still a session creation.
+One with an error code is a refused attempt.
+Otherwise it must satisfy all of:
 
-1. its `sourceIdentity` names a warrant `W` in the input;
-2. its `roleSessionName` equals `W`'s identifier;
-3. its `policy` is byte for byte the session policy compiled from `W` (section 8.2). AWS records the policy passed to `AssumeRole` in the event's request parameters, so a broker that passed a broader policy under a legitimate identifier is caught by the provider's own record;
-4. its time is inside `W`'s window, and its `durationSeconds` does not run past `W`'s `not_after`.
+1. its name is `AssumeRole`, its caller is a broker principal, and its request parameters are exactly the five the broker passes (`roleArn`, `roleSessionName`, `sourceIdentity`, `policy`, `durationSeconds`), so that no managed policy, session tag or other parameter can widen the session unseen;
+2. its `sourceIdentity` names a warrant `W` in the input;
+3. its `roleSessionName` equals `W`'s identifier;
+4. its `policy` is byte for byte the session policy compiled from `W` (section 8.2). AWS records the policy passed to `AssumeRole` in the event's request parameters, so a broker that passed a broader policy under a legitimate identifier is caught by the provider's own record;
+5. its time is inside `W`'s window, and its `durationSeconds` does not run past `W`'s `not_after`.
 
 A session creation that fails any of these is a **session mismatch**.
 
-**A managed action** is any other event whose `userIdentity` is a session of a managed role.
+**A managed action** is any other event whose `userIdentity` is a session of a managed role, or whose `sourceIdentity` has the warrant identifier's form on a session of any role: AWS carries a source identity into a role the session assumes, so work reached by chaining is still the warrant's work.
 It must carry a `sourceIdentity`, the identifier must name a warrant `W` in the input, and its time must be inside `W`'s window.
 One that does not carry a known identifier is an **unwarranted event**; one outside its warrant's window is an **out-of-window event**.
+Its session must be one the run saw created: the event's `userIdentity.accessKeyId` must equal the `responseElements.credentials.accessKeyId` of a session creation in the window or before it, checked as above.
+One that joins to no such creation is an **unseen session**, because nothing then shows that the broker made the session, under its warrant's policy: it may have been created in a region the run did not cover, before the look-back, or by a role chained from a managed session.
 A managed action with an error code is also reported as a **refused attempt**, which is information, not a failure: nothing was done.
 
-**A call on a session's behalf** is a managed action with no `sourceIdentity` and a `userIdentity.invokedBy` naming the AWS service that made it.
-AWS does not capture the source identity for these (assumption 4), and it sets `invokedBy` itself, so a caller cannot claim it.
-It is outside the claim and counted by service in every result; AWS enforced the session's own permissions on it, but the record does not say which warrant it served.
-A managed action with no source identity and no `invokedBy` is still an unwarranted event: the trust policy requires a source identity on every session, so the agent's own calls always carry one.
+**A call on a session's behalf** is a managed action that an AWS service made: its `userIdentity.invokedBy` names the service, or its `sourceIPAddress` is the service's host name.
+AWS sets both; a caller cannot choose either.
+The second is how a forward access session is recorded: on 2026-09-28, CodeCommit's `kms:Decrypt` calls for a reader session carried the session's identity and source identity, a key that was not the session's, `sourceIPAddress` `codecommit.amazonaws.com`, and no `invokedBy`.
+Such a call is the consequence of a call the session made, which is judged as a managed action; it is outside the claim (assumption 4) and counted by service and action in every result.
+A managed action with no source identity that no service made is still an unwarranted event: the trust policy requires a source identity on every session, so the agent's own calls always carry one.
 
 **Everything else** is activity by principals Remit does not manage.
 It is not a finding against the claim, which is about managed principals only, but it is counted by principal in every result, so that the claim's coverage is visible rather than implied.
@@ -266,7 +273,8 @@ If a grant does name such an action, the resource cannot be compared, and the ev
 
 ### 6.4 The verdict
 
-A run is **complete** when it has no session mismatch, no unwarranted event, no out-of-window event and no outside-warrant event, and when every managed role's trust policy, as observed, admits only sessions with a warrant-form source identity.
+A run is **complete** when it has no session mismatch, no unwarranted event, no unseen session, no out-of-window event and no outside-warrant event, and when every managed role's trust policy, as observed, admits only the broker principals and only sessions with a warrant-form source identity.
+A trust policy is read with the wildcards IAM uses, so `sts:Assume*` and `sts:Assume?ole` are read as allowing `sts:AssumeRole`, and any shape the check does not recognize fails it.
 
 The verdict is qualified, never silently upgraded:
 
@@ -278,12 +286,14 @@ Any failure makes the verdict **incomplete**, with every finding listed.
 ### 6.5 From an event to a request
 
 - **Action:** the actions that authorize the event, any one of which is enough.
-  By default that is one action: the event source without `.amazonaws.com`, a colon, and the event name.
-  Where AWS authorizes an operation with a differently named action, a table gives the actions instead:
-  the 60 Amazon S3 operations the Amazon S3 User Guide lists that way ("Required permissions for Amazon S3 API operations": `HeadObject` needs `s3:GetObject`, `ListBuckets` needs `s3:ListAllMyBuckets`; a versioned request may need the `...Version` action instead, so both are listed);
-  Lambda, whose event names carry the API version (`GetFunction20150331v2` is `lambda:GetFunction`) and whose `Invoke` and `InvokeWithResponseStream` need `lambda:InvokeFunction`;
-  and `sts:GetCallerIdentity`, which needs no permission and is never outside a warrant.
-  A difference in another service is still a mapping gap, and it is surfaced by the cross-check as an outside-warrant event rather than hidden by it.
+  The service is the event source without `.amazonaws.com`, except where the source is not the IAM prefix: `monitoring` is `cloudwatch`.
+  Lambda's event names lose the API version CloudTrail appends (`GetFunction20150331v2` is `GetFunction`).
+  The actions are then, in order:
+  for the 60 Amazon S3 operations the Amazon S3 User Guide lists with a differently named permission ("Required permissions for Amazon S3 API operations": `HeadObject` needs `s3:GetObject`, `ListBuckets` needs `s3:ListAllMyBuckets`; a versioned request may need the `...Version` action instead, so both are listed), those;
+  for any other operation AWS's service reference lists as authorized by differently named actions (`https://servicereference.us-east-1.amazonaws.com/`, "AuthorizedActions": `DescribeBudgets` needs `budgets:ViewBudget`), that service's own actions among them, or all of them if none is the service's own;
+  otherwise the service, a colon, and the event name.
+  `sts:GetCallerIdentity` needs no permission and is never outside a warrant.
+  The reference is kept as a generated table (`scripts/gen-authorizing-actions.py`); a difference it does not know is a mapping gap, surfaced by the cross-check as an outside-warrant event rather than hidden by it.
 - **Resource:** every ARN in the event's `resources`. An event with none is checked by action alone (section 6.3).
 - **Subject:** the warrant's subject; **time:** the event time.
 

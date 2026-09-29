@@ -22,6 +22,12 @@ use remit_reconcile::{
 use serde_json::{Value, json};
 
 const ROLE: &str = "arn:aws:iam::111122223333:role/remit-agent-readonly";
+/// The broker when the fixtures were recorded.
+const BROKER: &str = "arn:aws:iam::111122223333:user/admin";
+
+fn brokers() -> [String; 1] {
+    [BROKER.to_owned()]
+}
 
 fn fixture(name: &str) -> Value {
     let path = format!("{}/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"));
@@ -60,7 +66,7 @@ fn run(events: &[Event], trust: &Value, now_offset: u64) -> Report {
     let w = warrant();
     let roles = [ManagedRole {
         arn: ROLE.to_owned(),
-        trust_problems: trust_policy_problems(trust),
+        trust_problems: trust_policy_problems(trust, &brokers()),
     }];
     let warrants = [w.clone()];
     reconcile(&Input {
@@ -74,6 +80,8 @@ fn run(events: &[Event], trust: &Value, now_offset: u64) -> Report {
         source: EventSource::EventHistory,
         regions: &["us-east-1".to_owned(), "us-west-2".to_owned()],
         record_problems: &[],
+        brokers: &brokers(),
+        earlier: &[],
     })
 }
 
@@ -237,7 +245,22 @@ fn an_event_that_names_no_resource_fails_unless_a_grant_names_its_action() {
 
 /// The live warrant with `actions` added as a grant on its own resources, and the recorded
 /// events rewritten as if the broker had issued the session for it, with `edit` applied.
-fn widened(actions: &[&str], mut edit: impl FnMut(&mut Vec<Value>)) -> (Warrant, Vec<Event>) {
+fn widened(actions: &[&str], edit: impl FnMut(&mut Vec<Value>)) -> (Warrant, Vec<Event>) {
+    let live = warrant();
+    let resources: Vec<&str> = live.grants()[0]
+        .resources()
+        .iter()
+        .map(remit_core::ResourcePattern::as_str)
+        .collect();
+    widened_on(actions, &resources, edit)
+}
+
+/// As [`widened`], with the added grant on `on`.
+fn widened_on(
+    actions: &[&str],
+    on: &[&str],
+    mut edit: impl FnMut(&mut Vec<Value>),
+) -> (Warrant, Vec<Event>) {
     let live = warrant();
     let resources: Vec<&str> = live.grants()[0]
         .resources()
@@ -249,7 +272,7 @@ fn widened(actions: &[&str], mut edit: impl FnMut(&mut Vec<Value>)) -> (Warrant,
         .iter()
         .map(remit_core::ActionPattern::as_str)
         .collect();
-    let grants: [(&[&str], &[&str]); 2] = [(&first, &resources), (actions, &resources)];
+    let grants: [(&[&str], &[&str]); 2] = [(&first, &resources), (actions, on)];
     let w = Warrant::new(&WarrantSpec {
         issuer: live.issuer().as_str(),
         subject: live.subject().as_str(),
@@ -273,9 +296,13 @@ fn widened(actions: &[&str], mut edit: impl FnMut(&mut Vec<Value>)) -> (Warrant,
 }
 
 fn run_for(w: &Warrant, events: &[Event]) -> Report {
+    run_with_earlier(w, events, &[])
+}
+
+fn run_with_earlier(w: &Warrant, events: &[Event], earlier: &[Event]) -> Report {
     let roles = [ManagedRole {
         arn: ROLE.to_owned(),
-        trust_problems: trust_policy_problems(&fixture("trust-policy.json")),
+        trust_problems: trust_policy_problems(&fixture("trust-policy.json"), &brokers()),
     }];
     reconcile(&Input {
         warrants: std::slice::from_ref(w),
@@ -288,6 +315,8 @@ fn run_for(w: &Warrant, events: &[Event]) -> Report {
         source: EventSource::EventHistory,
         regions: &["us-east-1".to_owned(), "us-west-2".to_owned()],
         record_problems: &[],
+        brokers: &brokers(),
+        earlier,
     })
 }
 
@@ -324,7 +353,36 @@ fn what_a_service_does_is_counted_by_service_and_is_not_the_agent() {
         3600,
     );
     assert_eq!(r.findings, vec![], "{}", r.to_json().unwrap());
-    assert_eq!(r.on_behalf["cloudformation.amazonaws.com"], 1);
+    assert_eq!(
+        r.on_behalf["cloudformation.amazonaws.com"]["s3:GetBucketLocation"],
+        1
+    );
+
+    // As recorded on 2026-09-28: CodeCommit decrypting with KMS in the session's name,
+    // with its source identity, a key of its own, and the service as the source address.
+    let codecommit = |e: &mut Vec<Value>| {
+        e[1]["eventSource"] = json!("kms.amazonaws.com");
+        e[1]["eventName"] = json!("Decrypt");
+        e[1]["userIdentity"]["accessKeyId"] = json!("ASIAEXAMPLEFORWARD01");
+        e[1]["sourceIPAddress"] = json!("codecommit.amazonaws.com");
+        e[1]["resources"] = json!([{"type": "AWS::KMS::Key", "ARN": "arn:aws:kms:us-east-1:111122223333:key/example"}]);
+    };
+    let r = run(&events(codecommit), &fixture("trust-policy.json"), 3600);
+    assert_eq!(r.findings, vec![], "{}", r.to_json().unwrap());
+    assert_eq!(r.on_behalf["codecommit.amazonaws.com"]["kms:Decrypt"], 1);
+    // The same call from an address is the agent's own, and is judged as one.
+    let r = run(
+        &events(|e| {
+            codecommit(e);
+            e[1]["sourceIPAddress"] = json!("203.0.113.10");
+        }),
+        &fixture("trust-policy.json"),
+        3600,
+    );
+    assert_eq!(
+        kinds(&r),
+        vec![Kind::UnseenSession, Kind::OutsideWarrantEvent]
+    );
 
     // A service acting as itself is unmanaged, and named.
     let r = run(
@@ -338,6 +396,226 @@ fn what_a_service_does_is_counted_by_service_and_is_not_the_agent() {
         3600,
     );
     assert_eq!(r.unmanaged["AWSService:config.amazonaws.com"], 1);
+}
+
+#[test]
+fn a_session_created_with_anything_the_broker_never_passes_is_caught() {
+    // Red team F2(a): the exact compiled policy, copied so the byte comparison passes,
+    // plus a managed policy or session tags that could widen the session.
+    for (key, value) in [
+        (
+            "policyArns",
+            json!([{"arn": "arn:aws:iam::aws:policy/AdministratorAccess"}]),
+        ),
+        ("tags", json!([{"key": "team", "value": "admin"}])),
+        ("transitiveTagKeys", json!(["team"])),
+    ] {
+        let r = run(
+            &events(|e| e[0]["requestParameters"][key] = value.clone()),
+            &fixture("trust-policy.json"),
+            3600,
+        );
+        assert_eq!(kinds(&r), vec![Kind::SessionMismatch], "{key}");
+        assert!(r.findings[0].detail.contains(key), "{key}");
+    }
+}
+
+#[test]
+fn a_session_on_a_managed_role_is_recognized_however_the_request_spells_it() {
+    // Red team F2(b): an ARN spelled differently, with no policy and a long session. AWS
+    // records the role it resolved as the event's resource and in the assumed-role user.
+    let r = run(
+        &events(|e| {
+            e[0]["requestParameters"]["roleArn"] = json!(ROLE.to_uppercase());
+            e[0]["requestParameters"]
+                .as_object_mut()
+                .unwrap()
+                .remove("policy");
+        }),
+        &fixture("trust-policy.json"),
+        3600,
+    );
+    assert!(
+        kinds(&r).contains(&Kind::SessionMismatch),
+        "{:?}",
+        kinds(&r)
+    );
+    assert_eq!(r.verdict, Verdict::Incomplete);
+    // With no resource recorded, the assumed-role user still names the role.
+    let r = run(
+        &events(|e| {
+            e[0]["requestParameters"]["roleArn"] = json!(ROLE.to_uppercase());
+            e[0]["resources"] = json!([]);
+            e[0]["requestParameters"]
+                .as_object_mut()
+                .unwrap()
+                .remove("policy");
+        }),
+        &fixture("trust-policy.json"),
+        3600,
+    );
+    assert!(
+        kinds(&r).contains(&Kind::SessionMismatch),
+        "{:?}",
+        kinds(&r)
+    );
+    // With only the request left to name it, the role is still recognized.
+    let r = run(
+        &events(|e| {
+            e[0]["requestParameters"]["roleArn"] = json!(ROLE.to_uppercase());
+            e[0]["resources"] = json!([]);
+            e[0]["responseElements"]
+                .as_object_mut()
+                .unwrap()
+                .remove("assumedRoleUser");
+            e[0]["requestParameters"]
+                .as_object_mut()
+                .unwrap()
+                .remove("policy");
+        }),
+        &fixture("trust-policy.json"),
+        3600,
+    );
+    assert!(
+        kinds(&r).contains(&Kind::SessionMismatch),
+        "{:?}",
+        kinds(&r)
+    );
+}
+
+#[test]
+fn a_session_created_by_anyone_but_the_broker_or_another_way_is_caught() {
+    let r = run(
+        &events(|e| {
+            e[0]["userIdentity"]["arn"] = json!("arn:aws:iam::111122223333:user/someone");
+        }),
+        &fixture("trust-policy.json"),
+        3600,
+    );
+    assert_eq!(kinds(&r), vec![Kind::SessionMismatch]);
+    assert!(r.findings[0].detail.contains("not a broker"));
+    let r = run(
+        &events(|e| e[0]["eventName"] = json!("AssumeRoleWithWebIdentity")),
+        &fixture("trust-policy.json"),
+        3600,
+    );
+    assert_eq!(kinds(&r), vec![Kind::SessionMismatch]);
+    assert!(r.findings[0].detail.contains("never calls"));
+}
+
+#[test]
+fn an_action_by_a_session_whose_creation_was_not_seen_fails_the_run() {
+    // Red team F2(c): the creation is outside what the run gathered: another region's
+    // STS endpoint, before the window, or a trail without global events.
+    let r = run(
+        &events(|e| {
+            e.remove(0);
+        }),
+        &fixture("trust-policy.json"),
+        3600,
+    );
+    assert_eq!(kinds(&r), vec![Kind::UnseenSession]);
+    assert_eq!(r.verdict, Verdict::Incomplete);
+
+    // A creation from before the window, given as earlier, is joined and checked.
+    let w = warrant();
+    let all = events(|_| {});
+    let r = run_with_earlier(&w, &all[1..], &all[..1]);
+    assert_eq!(r.findings, vec![], "{}", r.to_json().unwrap());
+    assert_eq!(r.sessions_per_warrant[w.id().as_str()], 1);
+    // An earlier creation that is itself wrong is caught when the window uses it.
+    let bad = events(|e| e[0]["requestParameters"]["durationSeconds"] = json!(43200));
+    let r = run_with_earlier(&w, &bad[1..], &bad[..1]);
+    assert_eq!(kinds(&r), vec![Kind::SessionMismatch]);
+}
+
+#[test]
+fn a_warrant_identity_on_a_chained_role_is_still_the_warrants_work() {
+    // Red team F3: AWS carries the source identity into a role the session assumed, so
+    // work under another role with this warrant's identifier is caught, not unmanaged.
+    let r = run(
+        &events(|e| {
+            e[1]["userIdentity"]["sessionContext"]["sessionIssuer"]["arn"] =
+                json!("arn:aws:iam::111122223333:role/some-admin-role");
+            e[1]["userIdentity"]["arn"] = json!(
+                "arn:aws:sts::111122223333:assumed-role/some-admin-role/rw1-w27scolum43jyvkjja4g4tb7rgsgnal7"
+            );
+            e[1]["userIdentity"]["accessKeyId"] = json!("ASIAEXAMPLECHAINED01");
+        }),
+        &fixture("trust-policy.json"),
+        3600,
+    );
+    assert_eq!(kinds(&r), vec![Kind::UnseenSession]);
+    assert!(r.unmanaged.keys().all(|k| !k.contains("rw1-")));
+}
+
+/// An edit to a trust policy.
+type Edit = dyn Fn(&mut Value);
+
+#[test]
+fn a_trust_policy_that_admits_anyone_but_the_broker_fails_the_run() {
+    // Red team F4: wildcards IAM reads as AssumeRole, and principals other than the broker.
+    let real = fixture("trust-policy.json");
+    let with = |edit: &Edit| {
+        let mut p = real.clone();
+        edit(&mut p);
+        trust_policy_problems(&p, &brokers())
+    };
+    let cases: [(&str, &Edit); 5] = [
+        ("anyone, sts:Assume?ole, no condition", &|p| {
+            p["Statement"][0]["Principal"] = json!({"AWS": "*"});
+            p["Statement"][0]["Action"] = json!("sts:Assume?ole");
+            p["Statement"][0]
+                .as_object_mut()
+                .unwrap()
+                .remove("Condition");
+        }),
+        ("another account, sts:Assume*", &|p| {
+            p["Statement"][0]["Principal"] = json!({"AWS": "arn:aws:iam::444455556666:root"});
+            p["Statement"][0]["Action"] = json!("sts:Assume*");
+        }),
+        ("a federated principal with the condition", &|p| {
+            p["Statement"][0]["Principal"] = json!({"Federated": "arn:aws:iam::111122223333:oidc-provider/token.actions.githubusercontent.com"});
+            p["Statement"][0]["Action"] = json!("sts:AssumeRoleWithWebIdentity");
+        }),
+        ("the broker and a service", &|p| {
+            p["Statement"][0]["Principal"] =
+                json!({"AWS": BROKER, "Service": "lambda.amazonaws.com"});
+        }),
+        ("a principal of any kind", &|p| {
+            p["Statement"][0]["Principal"] = json!("*");
+        }),
+    ];
+    for (name, edit) in cases {
+        assert!(!with(edit).is_empty(), "{name} passed");
+    }
+    assert!(with(&|_| {}).is_empty());
+}
+
+#[test]
+fn an_s3_object_event_is_not_checked_against_the_bucket_it_is_in() {
+    let object = "arn:aws:s3:::abacross.com/index.html";
+    let (w, events) = widened_on(&["s3:GetObject"], &["arn:aws:s3:::abacross.com/*"], |e| {
+        e[1]["eventName"] = json!("GetObject");
+        e[1]["resources"] = json!([
+            {"type": "AWS::S3::Object", "ARN": object},
+            {"type": "AWS::S3::Bucket", "ARN": "arn:aws:s3:::abacross.com"}
+        ]);
+    });
+    let r = run_for(&w, &events);
+    assert_eq!(r.findings, vec![], "{}", r.to_json().unwrap());
+    // A bucket that is not the object's container is still checked.
+    let (w, events) = widened_on(&["s3:GetObject"], &["arn:aws:s3:::abacross.com/*"], |e| {
+        e[1]["eventName"] = json!("GetObject");
+        e[1]["resources"] = json!([
+            {"type": "AWS::S3::Object", "ARN": object},
+            {"type": "AWS::S3::Bucket", "ARN": "arn:aws:s3:::abacross.co"}
+        ]);
+    });
+    assert_eq!(
+        kinds(&run_for(&w, &events)),
+        vec![Kind::OutsideWarrantEvent]
+    );
 }
 
 #[test]
@@ -357,7 +635,7 @@ fn a_refused_attempt_is_reported_but_does_not_fail_the_run() {
 #[test]
 fn a_trust_policy_that_admits_sessions_without_a_warrant_fails_the_run() {
     let real = fixture("trust-policy.json");
-    assert!(trust_policy_problems(&real).is_empty());
+    assert!(trust_policy_problems(&real, &brokers()).is_empty());
 
     let mut no_condition = real.clone();
     no_condition["Statement"][0]
@@ -381,7 +659,10 @@ fn a_trust_policy_that_admits_sessions_without_a_warrant_fails_the_run() {
         ("split", split),
         ("loose", loose),
     ] {
-        assert!(!trust_policy_problems(&policy).is_empty(), "{name} passed");
+        assert!(
+            !trust_policy_problems(&policy, &brokers()).is_empty(),
+            "{name} passed"
+        );
         let r = run(&events(|_| {}), &policy, 3600);
         assert!(kinds(&r).contains(&Kind::TrustPolicy), "{name}");
         assert_eq!(r.verdict, Verdict::Incomplete, "{name}");
@@ -395,11 +676,12 @@ fn only_a_validated_record_without_problems_is_complete() {
     let w = warrant();
     let roles = [ManagedRole {
         arn: ROLE.to_owned(),
-        trust_problems: trust_policy_problems(&fixture("trust-policy.json")),
+        trust_problems: trust_policy_problems(&fixture("trust-policy.json"), &brokers()),
     }];
     let warrants = [w.clone()];
     let evs = events(|_| {});
     let regions = ["us-east-1".to_owned()];
+    let broker_list = brokers();
     let input = |source, problems: &'static [String]| Input {
         warrants: &warrants,
         roles: &roles,
@@ -411,6 +693,8 @@ fn only_a_validated_record_without_problems_is_complete() {
         source,
         regions: &regions,
         record_problems: problems,
+        brokers: &broker_list,
+        earlier: &[],
     };
     assert_eq!(
         reconcile(&input(EventSource::EventHistory, &[])).verdict,

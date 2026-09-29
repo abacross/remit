@@ -106,6 +106,10 @@ struct ReconcileArgs {
     /// A managed role ARN; repeat for more.
     #[arg(long = "role", required = true)]
     roles: Vec<String>,
+    /// The broker principal's ARN: the only caller that may create a session on a managed
+    /// role, and the only principal a managed role's trust policy may admit; repeat for more.
+    #[arg(long = "broker", required = true)]
+    brokers: Vec<String>,
     /// A region to gather events from; repeat. The report speaks for these only.
     #[arg(long = "region", required = true)]
     regions: Vec<String>,
@@ -562,6 +566,7 @@ async fn fetch_events(
     region: &str,
     from: u64,
     to: u64,
+    only: Option<&str>,
 ) -> Result<Vec<remit_reconcile::Event>> {
     let regional = config
         .to_builder()
@@ -574,9 +579,17 @@ async fn fetch_events(
     );
     let mut events = Vec::new();
     let mut token: Option<String> = None;
+    let filter = only.map(|name| {
+        aws_sdk_cloudtrail::types::LookupAttribute::builder()
+            .attribute_key(aws_sdk_cloudtrail::types::LookupAttributeKey::EventName)
+            .attribute_value(name)
+            .build()
+    });
+    let filter = filter.transpose().map_err(|e| e.to_string())?;
     loop {
         let page = client
             .lookup_events()
+            .set_lookup_attributes(filter.clone().map(|f| vec![f]))
             .start_time(start)
             .end_time(end)
             .max_results(50)
@@ -612,17 +625,30 @@ async fn fetch_events(
 /// The events of the window: from validated trail files when a local copy is given
 /// (SPEC 6.7), otherwise from CloudTrail event history; with any record problems and the
 /// coverage the trail established.
+/// What the run gathered from the record: the window's events, the session creations from
+/// the look-back before it, where they came from, the record's problems and coverage.
+type Gathered = (
+    Vec<remit_reconcile::Event>,
+    Vec<remit_reconcile::Event>,
+    remit_reconcile::EventSource,
+    Vec<String>,
+    Vec<remit_reconcile::trail::Coverage>,
+);
+
+/// Gathers the window's events, and the session creations from `lookback` seconds before
+/// it, so that a session already open at `from` joins to its creation.
 async fn gather_events(
     args: &ReconcileArgs,
     config: &aws_config::SdkConfig,
     from: u64,
     to: u64,
-) -> Result<(
-    Vec<remit_reconcile::Event>,
-    remit_reconcile::EventSource,
-    Vec<String>,
-    Vec<remit_reconcile::trail::Coverage>,
-)> {
+    lookback: u64,
+) -> Result<Gathered> {
+    let earlier_from = from.saturating_sub(lookback);
+    let mut earlier = Vec::new();
+    let is_creation = |e: &remit_reconcile::Event| {
+        e.source == "sts.amazonaws.com" && e.name.starts_with("AssumeRole")
+    };
     let mut events = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
     let mut record_problems = Vec::new();
@@ -641,13 +667,15 @@ async fn gather_events(
             &local.logs,
             &local.keys,
             &args.regions,
-            from,
+            earlier_from,
             need_to,
         );
         for r in &v.records {
             let e = remit_reconcile::Event::from_json(r).map_err(|e| e.to_string())?;
             if e.time >= from && e.time <= to && seen.insert(e.id.clone()) {
                 events.push(e);
+            } else if e.time >= earlier_from && e.time < from && is_creation(&e) {
+                earlier.push(e);
             }
         }
         eprintln!(
@@ -661,16 +689,27 @@ async fn gather_events(
         remit_reconcile::EventSource::ValidatedTrail
     } else {
         for region in &args.regions {
-            for e in fetch_events(config, region, from, to).await? {
+            for e in fetch_events(config, region, from, to, None).await? {
                 if seen.insert(e.id.clone()) {
                     events.push(e);
+                }
+            }
+            for name in [
+                "AssumeRole",
+                "AssumeRoleWithSAML",
+                "AssumeRoleWithWebIdentity",
+            ] {
+                for e in fetch_events(config, region, earlier_from, from, Some(name)).await? {
+                    if e.time < from && seen.insert(e.id.clone()) {
+                        earlier.push(e);
+                    }
                 }
             }
         }
         remit_reconcile::EventSource::EventHistory
     };
 
-    Ok((events, source, record_problems, coverage))
+    Ok((events, earlier, source, record_problems, coverage))
 }
 
 async fn reconcile(args: ReconcileArgs) -> Result<ExitCode> {
@@ -704,6 +743,7 @@ async fn reconcile(args: ReconcileArgs) -> Result<ExitCode> {
         .await;
     let iam = aws_sdk_iam::Client::new(&config);
     let mut roles = Vec::new();
+    let mut longest_session = 3600_u64;
     for arn in &args.roles {
         let name = arn.rsplit('/').next().unwrap_or(arn);
         let got = iam
@@ -712,20 +752,27 @@ async fn reconcile(args: ReconcileArgs) -> Result<ExitCode> {
             .send()
             .await
             .map_err(|e| format!("{arn}: {}", aws_sdk_iam::error::DisplayErrorContext(&e)))?;
-        let encoded = got
-            .role()
-            .and_then(|r| r.assume_role_policy_document())
+        let role = got.role().ok_or_else(|| format!("{arn}: no such role"))?;
+        // GetRole takes a name; the role it found must be the one named, account and path
+        // included, or the report would speak for a role it never looked at.
+        if role.arn() != arn {
+            return Err(format!("{arn}: the role by that name is {}", role.arn()));
+        }
+        let max = role.max_session_duration().map_or(3600, i64::from);
+        longest_session = longest_session.max(u64::try_from(max).unwrap_or(3600));
+        let encoded = role
+            .assume_role_policy_document()
             .ok_or_else(|| format!("{arn}: no trust policy"))?;
         let doc: serde_json::Value =
             serde_json::from_str(&percent_decode(encoded)?).map_err(|e| format!("{arn}: {e}"))?;
         roles.push(remit_reconcile::ManagedRole {
             arn: arn.clone(),
-            trust_problems: remit_reconcile::trust_policy_problems(&doc),
+            trust_problems: remit_reconcile::trust_policy_problems(&doc, &args.brokers),
         });
     }
 
-    let (events, source, record_problems, coverage) =
-        gather_events(&args, &config, from, to).await?;
+    let (events, earlier, source, record_problems, coverage) =
+        gather_events(&args, &config, from, to, longest_session).await?;
 
     let mut report = remit_reconcile::reconcile(&remit_reconcile::Input {
         warrants: &warrants,
@@ -738,6 +785,8 @@ async fn reconcile(args: ReconcileArgs) -> Result<ExitCode> {
         source,
         regions: &args.regions,
         record_problems: &record_problems,
+        brokers: &args.brokers,
+        earlier: &earlier,
     });
     report.refused_inputs = refused;
     report.record_coverage = coverage;

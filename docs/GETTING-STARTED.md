@@ -138,11 +138,14 @@ Reconciling makes read-only calls to CloudTrail and IAM with whatever credential
 remit key new --out ~/.config/remit/reconciler.key
 remit reconcile --log-dir .remit/log --log-policy .remit/log.policy \
   --root <your issuing key id> --role arn:aws:iam::<account>:role/remit-agent-readonly \
+  --broker arn:aws:iam::<account>:user/remit-broker \
   --region us-east-1 --from 2026-09-28T00:00:00Z --to 2026-09-29T00:00:00Z \
   --key ~/.config/remit/reconciler.key --out report.json
 ```
 
 The verdict is `complete` only when every session and every action on the managed roles maps to a logged warrant and stays inside it, the role's trust policy is as required, and the record itself is validated; otherwise it is `incomplete` and lists each finding with its event id.
+`--broker` names the only identity that may create sessions on the roles and the only one their trust policies may admit.
+Every action must also join to a session creation the run saw, so give every region the agents' sessions are created in: calls to the global STS endpoint are recorded in us-east-1.
 The report counts what each warrant was used for, by action, and counts everything done by identities Remit does not manage, by identity.
 Reconciling reads CloudTrail event history, so its verdict says `complete, unvalidated`; SPEC section 6.7 shows how to reconcile from the trail's validated log files instead.
 

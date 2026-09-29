@@ -32,6 +32,18 @@ pub struct Event {
     pub source_identity: Option<String>,
     /// `userIdentity.invokedBy`: the AWS service that made the call, when one did.
     pub invoked_by: Option<String>,
+    /// `sourceIPAddress`: an address, or the service's host name for a call an AWS service
+    /// made. AWS sets it; a caller cannot choose it.
+    pub source_ip: Option<String>,
+    /// `userIdentity.accessKeyId`: for a role session, the session's own key.
+    pub access_key_id: Option<String>,
+    /// For a session creation, `responseElements.credentials.accessKeyId`: the key the new
+    /// session's calls carry.
+    pub created_key: Option<String>,
+    /// For a session creation, `responseElements.assumedRoleUser.arn`.
+    pub assumed_role_user: Option<String>,
+    /// Every `resources[].ARN` whose `type` is `AWS::IAM::Role`.
+    pub role_resources: Vec<String>,
     /// `requestParameters`, kept whole for the session-creation checks.
     pub request_parameters: Value,
     /// Every `resources[].ARN`.
@@ -81,6 +93,16 @@ impl Event {
                     .collect()
             })
             .unwrap_or_default();
+        let role_resources = v
+            .get("resources")
+            .and_then(Value::as_array)
+            .map(|rs| {
+                rs.iter()
+                    .filter(|r| r.get("type").and_then(Value::as_str) == Some("AWS::IAM::Role"))
+                    .filter_map(|r| r.get("ARN").and_then(Value::as_str).map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default();
         Ok(Self {
             id: need(&["eventID"])?,
             time,
@@ -95,6 +117,11 @@ impl Event {
             ),
             source_identity: text(v, &["userIdentity", "sessionContext", "sourceIdentity"]),
             invoked_by: text(v, &["userIdentity", "invokedBy"]),
+            source_ip: text(v, &["sourceIPAddress"]),
+            access_key_id: text(v, &["userIdentity", "accessKeyId"]),
+            created_key: text(v, &["responseElements", "credentials", "accessKeyId"]),
+            assumed_role_user: text(v, &["responseElements", "assumedRoleUser", "arn"]),
+            role_resources,
             request_parameters: v.get("requestParameters").cloned().unwrap_or(Value::Null),
             resources,
         })
@@ -109,6 +136,20 @@ impl Event {
             .strip_suffix(".amazonaws.com")
             .unwrap_or(&self.source);
         format!("{service}:{}", self.name)
+    }
+
+    /// The AWS service that made this call, if one did: `userIdentity.invokedBy`, or a
+    /// service host name as the source address, which is how `CloudTrail` records a service
+    /// calling with the caller's own session (a forward access session: observed for
+    /// `CodeCommit` decrypting with KMS, 2026-09-28, with the session's source identity, its
+    /// own access key and no `invokedBy`).
+    #[must_use]
+    pub fn made_by_service(&self) -> Option<&str> {
+        self.invoked_by.as_deref().or_else(|| {
+            self.source_ip
+                .as_deref()
+                .filter(|ip| ip.ends_with(".amazonaws.com"))
+        })
     }
 
     /// The IAM actions any one of which authorizes this event (SPEC section 6.5); empty
