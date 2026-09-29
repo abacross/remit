@@ -82,6 +82,8 @@ flowchart TB
 
 The boundaries that matter are between the agent and three things it must not hold: the issuing key, the broker's credentials, and the log's and witnesses' keys.
 Most of what is Open below is a place where the default setup puts one of them on the agent's side.
+A zone is a trust boundary only when a different principal holds it: another operating-system user, another machine, another organization, or AWS itself.
+The section "Boundaries, crossing by crossing" checks each arrow above for that, and for what the receiving side checks.
 
 ## Assets
 
@@ -174,6 +176,8 @@ Each is considered alone and together with the others.
 | E | The agent runs its own program under a name `--allow` permits | Prevented | New: each `--allow` entry is resolved to its canonical file when the server starts, and only those files run (`only_the_allowed_files_run_whatever_they_are_called`). |
 | E | An allowed program does more than expected (`aws` aliases run shell commands) | Accepted | The allow list chooses which program starts, not what it does; whatever it does in AWS runs under the session. |
 | S | The agent replaces its current warrant with another logged one | **Open** | The bearer problem (known gap 5). |
+| S | The agent starts `remit run` or `remit mcp` with trusted roots and a log policy of its own | **Open** | Reproduced: a warrant for `iam:*`, signed and logged by the agent, passed every check (crossing X5, known gap 10). |
+| T | The agent points the broker's `AssumeRole` at a server of its choosing | Prevented | New: endpoint overrides from the environment or a profile are refused (`an_endpoint_override_is_refused_before_any_call`). |
 | E | The agent runs `aws` without the hook noticing | Accepted | The hook is a guide rail, not a boundary; the red team bypassed it fifteen ways, as expected. |
 
 ### 7. The provider's record and the reconciler
@@ -186,6 +190,9 @@ Each is considered alone and together with the others.
 | S | A session creation disguised by spelling the role differently | Detected | New, as in component 5. |
 | R | A session whose creation the run never saw: another region's STS endpoint, before the window, a chained role | Detected | New: the access-key join; creations are gathered from before the window as far back as the roles' longest session. |
 | E | A trust policy that admits more than the broker (`sts:Assume*`, another account, a federated principal) | Detected | Was not; new: actions are read with IAM's wildcards and only the brokers may be admitted (`a_trust_policy_that_admits_anyone_but_the_broker_fails_the_run`). |
+| S | The reconciler's reads sent to a server of the caller's choosing | Prevented | New: reproduced with a local listener receiving the reconciler's `GetRole`; endpoint overrides are now refused (crossing X12). |
+| S | A trail validated under CloudTrail keys the caller made up | Detected by a verifier | New: each region's coverage records the fingerprints its chain verified under and the newest digest, to compare with the keys AWS publishes (crossing X12). |
+| T | The reconciler, its inputs or its key are the agent's | **Open** | On a single-user machine they are (known gaps 10 and 11); its result is then the agent grading itself. |
 | T | The record altered | Detected with a validated trail | Digest chain verification (SPEC 6.7); from event history the verdict can only be `complete, unvalidated`. |
 | R | The trail's scope narrowed: event selectors, global service events, regions | **Open** | Integrity is checked, scope is not (known gap 9); the access-key join now catches a missing creation, not a missing action. |
 | R | Events delivered after the settling period | Accepted | Stated in every result; re-running the window confirms it. |
@@ -207,6 +214,7 @@ Each is considered alone and together with the others.
 | --- | --- | --- | --- |
 | T | A release binary replaced | Detected | SHA-256 sums, Sigstore build provenance (`gh attestation verify`), CycloneDX SBOM. |
 | T | A build tool compromised to alter binaries or attestations | Prevented, as far as pinning reaches | New: Zig and cargo-zigbuild install by wheel hash, and the SBOM tool, at a fixed version, runs in a job with no permission to write the release or sign for it. |
+| T | The installed binary replaced after installation | **Open** | On a single-user machine the agent's user owns `~/.local/bin/remit`; nothing checks it again (crossing X15, known gap 11). |
 | E | A vulnerable dependency | Detected for known advisories | `cargo audit` on every push and weekly; RustSec advisories fixed in 0.1.2. |
 
 ### 10. Project state on disk (`remit init`, `remit task`)
@@ -216,7 +224,63 @@ Each is considered alone and together with the others.
 | T | The agent edits or recreates the log, the witness state or the trust policy | **Open** | They live in the project directory the agent works in, under its user (known gap 6); the red team deleted and recreated the log and had the local witness cosign the new history. |
 | I | Keys committed to the repository | Prevented | `remit init` writes `.gitignore` with `*.key`. |
 
+## Boundaries, crossing by crossing
+
+Added the same day, after the owner asked whether the boundaries between the components had been reviewed: they had not been, one by one.
+The STRIDE tables above ask what can go wrong inside each component; this section asks, for every arrow that crosses a zone, what crosses it, what the receiving side checks, and who controls the input in practice.
+It found two flaws the component review missed, both fixed, and one that changes the verdict.
+
+### Who holds each zone
+
+A zone is only a boundary if a different principal holds it.
+On a machine where the agent runs as the person who set Remit up, which is what `remit init` makes and what Abacross ran on 2026-09-28, the zones collapse:
+
+| Zone | Meant to be held by | Held on a single-user machine by |
+| --- | --- | --- |
+| Person with the issuing key | The people who issue | The agent's user: `~/.config/remit/root.key` |
+| Public log | The log operator and independent witnesses | The agent's user: the log key, the local witness key and the trust policy file |
+| Agent's machine | The agent | The agent's user |
+| Broker | A separate identity (known gap 3) | The agent's user: the broker's key, and the trusted roots and log policy it is given |
+| AWS account | AWS | AWS |
+| Reconciler and verifiers | Someone other than the agent | The agent's user: the binary, the reconciler's key and every input it trusts |
+| Releases | GitHub's build, attested | GitHub's build; after installation the binary is a file the agent's user can replace |
+
+Every file listed was checked on 2026-09-28 and is owned by the agent's user.
+So on such a machine there are three principals, not six: the agent's user, AWS, and the outside world (GitHub, the timestamp authority).
+Only the boundaries with AWS and with the outside world are held by someone other than the agent.
+
+### Each crossing
+
+| # | Crossing | What crosses | What the receiver checks | Status |
+| --- | --- | --- | --- | --- |
+| X1 | Issuer to log | A signed warrant | That it decodes; the log is a record, not a judge, and accepts any chain. Roots are enforced where a warrant is used (X5) and reconciled (X13). | Prevented as designed; the log key's custody is known gap 6 |
+| X2 | Model approver to log | A warrant the approver signed for a request the agent wrote | That the request fits a bound a person signed; a fooled model cannot widen it (component 3) | Prevented |
+| X3 | Log to witnesses | A checkpoint | The log's signature, consistency with every checkpoint cosigned before; forks refused | Prevented where the witnesses are other parties; the default local witness is the agent's (gap 6) |
+| X4 | Log to anchors | A checkpoint's digest | The authority timestamps it over HTTPS; remit confines receipts to the anchors directory and checks the token's digest | Prevented; keeping the anchors is gap 8 |
+| X5 | Log and issuer to the broker (`remit run`, `remit mcp`) | The chain, its proof, the trusted root keys and the log's trust policy | The chain verifies to a trusted root and is proven logged under the policy, but **the trusted roots and the policy are whatever the caller passes**. Reproduced: a warrant for `iam:*` and `s3:*`, signed by a key the agent made and logged in a log the agent made, passed every check and stopped only for want of credentials. | **Open**, known gap 10 |
+| X6 | Agent to `remit mcp` | Tool calls over stdio | Arguments validated; programs resolved to allowed files. The server's own configuration (chain, roots, policy, allow list) comes from the agent's MCP settings, as in X5. | Prevented for the calls; configuration is gap 10 |
+| X7 | Broker's credentials to the broker | An access key, from the environment or a profile | Nothing; the process is the agent's user | **Open**, known gap 3 |
+| X8 | Broker to STS | `AssumeRole`, signed with the broker's key | TLS to AWS. **Was not checked: `AWS_ENDPOINT_URL` or a profile's `endpoint_url` sent the call wherever the caller chose.** Now refused. | Prevented (new) |
+| X9 | STS to the command | The session's credentials, in its environment | Nothing, and nothing can: the command is the agent's, and the credentials are the warrant's | Accepted |
+| X10 | Session to AWS services | API calls | AWS enforces the session policy; resource policies add to it (gap 1); services acting in the session's name are counted (component 7) | Prevented, with gap 1 |
+| X11 | AWS to CloudTrail | The record | Internal to AWS; delivery time and the trail's scope are the reconciler's concern | Accepted; scope is gap 9 |
+| X12 | CloudTrail to the reconciler | Events, from event history or trail files | TLS; for trail files, AWS's signed digest chain. **Was not checked: the endpoint override of X8 also redirected the reconciler's reads (reproduced with a local listener receiving its `GetRole`), and the CloudTrail public keys that validate the chain are a file the caller supplies, not recorded in the result.** The override is now refused and the key fingerprints are in the result. | Prevented for the endpoint (new); keys Detected by a verifier who compares the fingerprints (new) |
+| X13 | Log and roots to the reconciler | The logged warrants, the trust policy, the trusted roots | Chains verify to the roots and are established at a trusted checkpoint, but the roots and policy are the caller's, as in X5 | **Open**, known gap 10 |
+| X14 | Reconciler to verifiers | A signed result | The signature, in its own domain, under a key the verifier names; the verifier must know that key from somewhere the agent cannot write | Prevented, given the key's custody |
+| X15 | Release to the installed binary | The `remit` binary | Checksums and provenance when it is downloaded; after that it is a file, and on a single-user machine the agent's user can replace the program that checks it | **Open**, known gap 11 |
+
+### What this changes
+
+On a single-user machine, Remit's local checks guide an agent that is not trying to get around them: they refuse a chain that is not logged, a grant that escapes the warrant, a program not allowed.
+They do not bind an agent that is, because every file and process they rely on is the agent's own.
+What still holds there is what AWS holds: the role's own permissions are the most any session can do, and CloudTrail records every call, the agent's own sessions included.
+A reconciler run somewhere the agent cannot reach, with its own binary, trust anchors and key, would catch the agent's own warrants as unwarranted (their identifiers name no warrant in the real log) and its own sessions as mismatches.
+A reconciler run on the same machine, as Abacross ran it on 2026-09-28, is the agent grading itself: its result is true only as far as the agent is honest.
+
 ## Does it hold up?
+
+Every claim below assumes the zones are held by different principals (assumption 7).
+On a single-user machine they are not, and the claims reduce to what AWS enforces and records (see "What this changes").
 
 **Authorized** holds against a misbehaving agent (A1) and an over-delegating one (A3) when the issuing key and the broker's credentials are out of the agent's reach.
 It does not hold against an agent that can read the issuing key, which the default single-user setup allows (known gap 6), or that uses another agent's valid warrant (known gap 5).
@@ -228,10 +292,12 @@ The exceptions are resource policies that name the session or grant to everyone,
 **Complete** now holds, for managed principals in the regions and event classes the record covers, against every way the red team produced a false `complete` from ordinary AWS behaviour: actions with no resource, sessions opened with extra parameters or by anyone but the broker, sessions whose creation the run did not see, chained roles, and loose trust policies.
 Each is a test that fails on 0.1.3.
 Run over the day's real record on 2026-09-28 (1,638 events), the reconciler joined all 19 warranted sessions and 121 warranted actions to checked creations, and counted 8 CodeCommit decrypts as calls made on a session's behalf.
+That run was on the agent's own machine, so it shows the checks work on real data, not that the agent was honest (known gap 11).
 It still depends on the trail's scope, which it does not check (known gap 9).
 
-The single change that closes the most of what is Open is moving the broker off the agent's host: a broker that is a separate service with its own identity, holding no static key, and checking a signature by the warrant's subject before opening a session.
-That closes known gap 3, makes known gap 5 fixable, and removes the reason the default setup keeps the log's keys beside the agent.
+The changes that close the most of what is Open are two moves off the agent's host.
+The broker becomes a separate service with its own identity, its own trusted roots and log policy, no static key, and a check of a signature by the warrant's subject before it opens a session: that closes known gaps 3 and 10 for the broker, and makes gap 5 fixable.
+The reconciler runs elsewhere, with a binary, trust anchors and a key the agent cannot reach: that closes gaps 10 and 11 for the judgement, so that a `complete` means something even about an agent that tried.
 
 ## Assumptions
 
@@ -243,6 +309,7 @@ Remit's guarantees depend on these, and each result restates the ones it relied 
 4. The broker's credentials are out of the agent's reach, so that only the broker opens sessions on the managed roles; the reconciler detects when this does not hold (known gap 3), but cannot prevent it.
 5. Clocks are within 60 seconds of AWS's. The broker keeps that margin between a session's end and its warrant's end (SPEC section 8.1), and the reconciler checks every session against AWS's recorded time.
 6. A verifier trusts witnesses the log's operator does not control, and keeps its own copies of anchors.
+7. The zones in the diagram are held by different principals: the broker, the log, the reconciler and whoever holds the issuing key are not the agent's operating-system user. Where they are, the claims reduce to what AWS enforces and records.
 
 ## Known gaps
 
@@ -257,6 +324,8 @@ Limits of the design as built, stated so that no one has to find them.
 7. **The log does not prove a warrant was logged before its session.** The broker refuses unlogged warrants, but someone with an issuing key and the broker's credentials can open a session under a warrant's identifier first and log the warrant later. The fix is to require each warrant's entry in a checkpoint whose witness cosignatures are timestamped before the session's creation.
 8. **Anchors protect only the verifier who keeps them.** Whoever can delete the anchors directory can delete what it shows. The fix is to publish receipts as record entries in the log, so that witnesses hold them.
 9. **The trail's scope is not checked.** A validated trail proves its files are whole, not that it records every region, global service events, and the data events the warrants concern. An administrator who narrows it (A6) narrows what `complete` means without a finding. The fix is to read the trail's configuration (`GetTrailStatus`, `GetEventSelectors`) on every run and state it in the result.
+10. **The broker and the reconciler take their trust anchors from whoever starts them.** The trusted root keys and the log's trust policy are arguments, and the CloudTrail public keys a file; when the agent starts `remit run`, `remit mcp` or `remit reconcile`, it chooses what they trust. Reproduced on 2026-09-28 (crossing X5). The fix is that each component owns its trust configuration on its own side of the boundary: a broker service configured by the issuers, a reconciler whose roots and policy are committed where it runs, and CloudTrail keys fetched by the reconciler and recorded in the result (the recording is done; the fetching is not).
+11. **On a single-user machine, the agent is every local principal.** The agent's user owns the issuing key, the log and witness keys, the broker's key, the reconciler's inputs and key, and the installed binary. Remit's local checks then guide an agent but do not bind one; the role's permissions and CloudTrail still do. The fix is separate principals: the broker and the reconciler off the host, the log's witnesses run by others, and the binary installed where the agent's user cannot write.
 
 ## Out of scope
 
