@@ -30,6 +30,10 @@ Read the section before doing that kind of work; add an entry in the same commit
 - `type_complexity` in tests: name the type with a `type` alias.
 - Closures in test tables must end their statements with `;` (`semicolon_if_nothing_returned`).
 
+## Disk
+
+- Cargo never deletes old build outputs, and with full debug information each copy of a program was about 370 MB; `target/` reached 36 GB (2026-09-30). `[profile.dev] debug = "line-tables-only"` made the `remit` debug binary 109 MB and a full CI build 3.4 GB; run `cargo clean` when it creeps back.
+
 ## Releases
 
 - The release pipeline attests `dist/*.tar.gz` and `dist/*.zip`; verify a release as a user would (`gh release download`, `sha256sum -c SHA256SUMS`, `gh attestation verify`) before installing it.

@@ -23,3 +23,8 @@ expect_used = "warn"
 panic = "warn"
 indexing_slicing = "warn"
 arithmetic_side_effects = "warn"
+
+# Line tables only: backtraces keep file and line, debug builds stay several times
+# smaller (full debug information made target/ grow to 36 GB, 2026-09-30).
+[profile.dev]
+debug = "line-tables-only"
