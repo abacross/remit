@@ -14,7 +14,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use http_body_util::{BodyExt, Full, Limited};
+use http_body_util::{BodyExt, Full};
 use hyper::body::{Bytes, Incoming};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
@@ -26,6 +26,33 @@ use remit_logstore::{Cosigner, LocalWitness};
 /// The largest request accepted: a checkpoint with many signatures and 63 proof lines fit
 /// in far less.
 pub const MAX_REQUEST_BYTES: usize = 262_144;
+
+/// The most of a request body read before replying, even to a request that is refused. A
+/// reply sent with the body unread closes the connection with data still waiting in it,
+/// which the operating system answers with a reset, and the client may see the reset
+/// instead of the reply (a flaky test found this, 2026-09-29).
+const DRAIN_BYTES: usize = 4 * MAX_REQUEST_BYTES;
+
+/// Reads the whole body, keeping it only if it is at most `MAX_REQUEST_BYTES`. Past that,
+/// it keeps reading and discarding up to `DRAIN_BYTES`, so that the refusal is delivered.
+/// `None` for a body too long, longer than that, or unreadable.
+async fn read_body(mut body: Incoming) -> Option<Vec<u8>> {
+    let mut kept = Vec::new();
+    let mut seen = 0usize;
+    while let Some(frame) = body.frame().await {
+        let frame = frame.ok()?;
+        if let Some(data) = frame.data_ref() {
+            seen = seen.saturating_add(data.len());
+            if seen > DRAIN_BYTES {
+                return None;
+            }
+            if seen <= MAX_REQUEST_BYTES {
+                kept.extend_from_slice(data);
+            }
+        }
+    }
+    (seen <= MAX_REQUEST_BYTES).then_some(kept)
+}
 
 fn reply(status: StatusCode, content_type: &str, body: String) -> Response<Full<Bytes>> {
     let mut r = Response::new(Full::new(Bytes::from(body)));
@@ -61,27 +88,28 @@ async fn handle(
     req: Request<Incoming>,
 ) -> Result<Response<Full<Bytes>>, std::convert::Infallible> {
     let plain = "text/plain; charset=utf-8";
-    if req.uri().path() != "/add-checkpoint" {
+    let path_ok = req.uri().path() == "/add-checkpoint";
+    let method_ok = req.method() == Method::POST;
+    // Read first, whatever the answer will be, so that the answer arrives.
+    let body = read_body(req.into_body()).await;
+    if !path_ok {
         return Ok(reply(StatusCode::NOT_FOUND, plain, "not found\n".into()));
     }
-    if req.method() != Method::POST {
+    if !method_ok {
         return Ok(reply(
             StatusCode::METHOD_NOT_ALLOWED,
             plain,
             "POST only\n".into(),
         ));
     }
-    let Ok(collected) = Limited::new(req.into_body(), MAX_REQUEST_BYTES)
-        .collect()
-        .await
-    else {
+    let Some(bytes) = body else {
         return Ok(reply(
             StatusCode::BAD_REQUEST,
             plain,
             "request too large or unreadable\n".into(),
         ));
     };
-    let Ok(body) = String::from_utf8(collected.to_bytes().to_vec()) else {
+    let Ok(body) = String::from_utf8(bytes) else {
         return Ok(reply(StatusCode::BAD_REQUEST, plain, "not UTF-8\n".into()));
     };
     // The witness writes its state to disk before replying: off the async threads.
