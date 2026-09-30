@@ -8,7 +8,7 @@ On an agent's machine, the agent's user can replace the binary, edit the trusted
 
 1. Create a private repository, and give no agent's GitHub identity write access to it.
    If an agent works with a person's own GitHub credentials, this boundary does not hold: give the agent an identity of its own first.
-2. Deploy `deploy/aws/reconciler-role.yaml` with that repository's name.
+2. Deploy `deploy/aws/reconciler-role.yaml` with that repository's OIDC subject prefix (`gh api repos/<owner/name>/actions/oidc/customization/sub --jq .sub_claim_prefix`; `deploy/aws/setup.sh reconciler <owner/name>` looks it up).
    The role reads CloudTrail and the managed roles' trust policies, and nothing else; GitHub's OIDC token is how the workflow assumes it, so no AWS key exists.
 3. In the repository, commit the trust anchors:
    - `trust/roots.txt`: the issuers' root key identifiers, one per line;

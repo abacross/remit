@@ -87,9 +87,13 @@ case "${1:-}" in
   reconciler)
     repo="${2:-}"; [ -n "$repo" ] || die "reconciler <owner/repo>"
     need REMIT_ROLES
+    command -v gh >/dev/null || die "gh is needed to read the repository's OIDC subject"
+    subject=$(gh api "repos/$repo/actions/oidc/customization/sub" --jq .sub_claim_prefix)
+    [ -n "$subject" ] || die "GitHub gave no OIDC subject for $repo"
+    say "the role will trust $subject, branch main"
     run aws cloudformation deploy --region "$REGION" --stack-name remit-reconciler \
       --template-file "$HERE/reconciler-role.yaml" --capabilities CAPABILITY_NAMED_IAM \
-      --parameter-overrides GitHubRepository="$repo" ManagedRoleArns="$(role_arns)"
+      --parameter-overrides GitHubSubject="$subject" ManagedRoleArns="$(role_arns)"
     say "reconciler role: $(out remit-reconciler RoleArn); set it as REMIT_AWS_ROLE (deploy/github/README.md)"
     ;;
   status)

@@ -7,17 +7,26 @@
 #
 #   aws cloudformation deploy --stack-name remit-reconciler --template-file deploy/aws/reconciler-role.yaml \
 #     --capabilities CAPABILITY_NAMED_IAM --parameter-overrides \
-#       GitHubRepository=<owner/name> ManagedRoleArns=<role arn,...> [TrailBucket=<bucket>] \
+#       GitHubSubject=<subject prefix> ManagedRoleArns=<role arn,...> [TrailBucket=<bucket>] \
 #       [CreateOidcProvider=false if the account already has GitHub's provider]
+#
+# The subject prefix is what GitHub puts at the start of the repository's OIDC `sub` claim:
+#
+#   gh api repos/<owner/name>/actions/oidc/customization/sub --jq .sub_claim_prefix
+#
+# A repository with immutable subjects (GitHub's default for new ones) gives
+# `repo:<owner>@<owner id>/<name>@<repository id>`, older ones `repo:<owner>/<name>`. Trusting
+# the immutable form means a repository deleted and re-created under the same name, by anyone,
+# cannot assume the role.
 #
 # Reverse: delete the stack.
 AWSTemplateFormatVersion: "2010-09-09"
 Description: Remit reconciler, read-only, assumed from GitHub Actions with OIDC
 Parameters:
-  GitHubRepository:
+  GitHubSubject:
     Type: String
-    Description: The repository whose workflow may assume this role, as owner/name.
-    AllowedPattern: "[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"
+    Description: The repository's OIDC subject prefix, as GitHub reports it (see above).
+    AllowedPattern: "repo:[A-Za-z0-9_.-]+(@[0-9]+)?/[A-Za-z0-9_.-]+(@[0-9]+)?"
   Branch:
     Type: String
     Default: main
@@ -62,7 +71,7 @@ Resources:
             Condition:
               StringEquals:
                 token.actions.githubusercontent.com:aud: sts.amazonaws.com
-                token.actions.githubusercontent.com:sub: !Sub repo:${GitHubRepository}:ref:refs/heads/${Branch}
+                token.actions.githubusercontent.com:sub: !Sub ${GitHubSubject}:ref:refs/heads/${Branch}
       Policies:
         - PolicyName: read-the-record
           PolicyDocument:

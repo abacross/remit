@@ -10,6 +10,7 @@ Read the section before doing that kind of work; add an entry in the same commit
 - A service calling in a session's name (a forward access session) is recorded with the session's identity and source identity, a different access key, the service's host name as `sourceIPAddress`, and no `invokedBy` (CodeCommit decrypting with KMS, 2026-09-28).
 - CloudTrail records `policyArns` in an `AssumeRole` event's request parameters (tested 2026-09-29).
 - The Rust SDK honours `AWS_ENDPOINT_URL`, `AWS_ENDPOINT_URL_<SERVICE>` and a profile's `endpoint_url`; `refuse_endpoint_overrides` makes the SDK's own per-service lookup to refuse them.
+- GitHub's OIDC `sub` claim is not always `repo:<owner>/<name>:...`: a repository with immutable subjects (the default for new ones by 2026-09) sends `repo:<owner>@<id>/<name>@<id>:...`, and a role trusting the old form refuses every run. Read the prefix from `gh api repos/<owner/name>/actions/oidc/customization/sub` rather than composing it (first scheduled reconcile, 2026-09-30).
 - S3 data events' resource lists are unverified: no documented example was found (2026-09-28).
 
 ## Testing
