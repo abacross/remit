@@ -71,6 +71,7 @@ jobs:
           set -euo pipefail
           umask 077
           printf '%s\n' "$RECONCILER_KEY" > "$RUNNER_TEMP/reconciler.key"
+          echo "reconciler key id: $(remit key id --key "$RUNNER_TEMP/reconciler.key")"
           from=$(date -u -d 'yesterday 00:00' +%FT%TZ)
           to=$(date -u -d 'today 00:00' +%FT%TZ)
           args=()
