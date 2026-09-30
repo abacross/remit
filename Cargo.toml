@@ -28,3 +28,15 @@ arithmetic_side_effects = "warn"
 # smaller (full debug information made target/ grow to 36 GB, 2026-09-30).
 [profile.dev]
 debug = "line-tables-only"
+
+# Dependencies need no debug information at all: most of the build is the AWS SDK.
+[profile.dev.package."*"]
+debug = false
+
+# Small release binaries: symbols stripped, one optimisation pass over the whole
+# program, and no unwinding tables (a panic still runs the panic hook, then aborts).
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
+panic = "abort"

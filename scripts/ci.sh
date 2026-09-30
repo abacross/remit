@@ -9,6 +9,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 step() { printf '\n== %s\n' "$*"; }
+# Cargo keeps every old build output; past 5 GB, start clean (it once reached 36 GB).
+if [ -d target ] && [ "$(du -sm target | cut -f1)" -gt 5120 ]; then
+  step "target/ is $(du -sh target | cut -f1): cargo clean"; cargo clean
+fi
 step "format";  cargo fmt --all -- --check
 step "lints";   cargo clippy --workspace --all-targets --locked -- -D warnings
 step "tests";   cargo test --workspace --locked

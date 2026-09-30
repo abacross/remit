@@ -32,7 +32,9 @@ Read the section before doing that kind of work; add an entry in the same commit
 
 ## Disk
 
-- Cargo never deletes old build outputs, and with full debug information each copy of a program was about 370 MB; `target/` reached 36 GB (2026-09-30). `[profile.dev] debug = "line-tables-only"` made the `remit` debug binary 109 MB and a full CI build 3.4 GB; run `cargo clean` when it creeps back.
+- Cargo never deletes old build outputs, and with full debug information each copy of a program was about 370 MB; `target/` reached 36 GB (2026-09-30). Line tables for Remit's own crates and no debug information for dependencies made a full CI build 2.0 GB and the debug `remit` 59 MB; `scripts/ci.sh` cleans past 5 GB.
+- The release profile (strip, LTO, one codegen unit, abort on panic) took the native release `remit` from 28.9 MB to 10.5 MB; the broken-pipe hook still exits 141 under abort, checked with a reader that leaves first.
+- What remains is the AWS SDK: each service crate compiles every operation (IAM's library alone is 154 MB) though Remit calls a handful. Replacing it with hand-signed calls would shrink it further, at the price of hand-written signing in a security tool; not done.
 
 ## Releases
 
