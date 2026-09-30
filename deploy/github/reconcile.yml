@@ -22,6 +22,24 @@ jobs:
     env:
       REMIT_VERSION: ${{ vars.REMIT_VERSION }}
     steps:
+      - name: every setting is present
+        env:
+          RECONCILER_KEY: ${{ secrets.REMIT_RECONCILER_KEY }}
+          REMIT_LOG_REPOSITORY: ${{ vars.REMIT_LOG_REPOSITORY }}
+          REMIT_AWS_ROLE: ${{ vars.REMIT_AWS_ROLE }}
+          REMIT_ROLES: ${{ vars.REMIT_ROLES }}
+          REMIT_BROKERS: ${{ vars.REMIT_BROKERS }}
+          REMIT_REGIONS: ${{ vars.REMIT_REGIONS }}
+        run: |
+          missing=()
+          [ -n "$RECONCILER_KEY" ] || missing+=("secret REMIT_RECONCILER_KEY")
+          for v in REMIT_VERSION REMIT_LOG_REPOSITORY REMIT_AWS_ROLE REMIT_ROLES REMIT_BROKERS REMIT_REGIONS; do
+            [ -n "${!v}" ] || missing+=("variable $v")
+          done
+          if [ ${#missing[@]} -gt 0 ]; then
+            printf '::error::not set: %s (see the README)\n' "${missing[@]}"
+            exit 1
+          fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: remit, checked before it is run
         env:
@@ -81,6 +99,13 @@ jobs:
           git push
       - name: an incomplete result fails the job
         if: steps.run.outputs.status != '0'
+        env:
+          STATUS: ${{ steps.run.outputs.status }}
+          OUT: ${{ steps.run.outputs.out }}
         run: |
-          echo "remit reconcile exited ${{ steps.run.outputs.status }}: see ${{ steps.run.outputs.out }}" >&2
+          if [ -f "$OUT" ]; then
+            echo "::error::remit reconcile exited $STATUS: the signed result is $OUT"
+          else
+            echo "::error::remit reconcile exited $STATUS without a result: its message is in the step 'reconcile yesterday'"
+          fi
           exit 1
